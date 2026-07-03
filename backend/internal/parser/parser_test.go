@@ -61,6 +61,24 @@ func TestParseRelayQRAndEnter(t *testing.T) {
 	}
 }
 
+func TestParseMidSteps(t *testing.T) {
+	for line, typ := range map[string]EventType{
+		"20260703 12:59:02.085187 UTC 1 DEBUG [findPermit] Current permit found and assigned - GatewayPlugin.cc:210": EventPermit,
+		"20260703 12:59:02.090187 UTC 1 DEBUG [findPermit] Recent permit found and assigned - GatewayPlugin.cc:215":  EventPermit,
+		"20260703 13:00:27.995886 UTC 1 DEBUG [makePayment] Processing payment - POSWorker.cpp:60":                   EventPayment,
+	} {
+		ev := Parse("p24gui", line)
+		if ev == nil || ev.Type != typ {
+			t.Errorf("qadam aniqlanmadi (%q): %+v", line, ev)
+		}
+	}
+	// "Processing payment" ichida Vendotek bo'lsa ham bu 3-qadam, relay emas
+	ev := Parse("p24gui", "20260703 13:00:27.995886 UTC 1 DEBUG [makePayment] Vendotek exit 1: Processing payment: 01M635ZB - POSWorker.cpp:60")
+	if ev == nil || ev.Type != EventPayment || ev.Plate != "01M635ZB" {
+		t.Errorf("payment ustuvorligi buzildi: %+v", ev)
+	}
+}
+
 // Docker --timestamps prefiksi bilan ham ishlashi kerak.
 func TestParseWithDockerPrefix(t *testing.T) {
 	line := "2026-07-03T12:59:02.400000000Z 20260703 12:59:02.065187 UTC 1 DEBUG [operator()] -------------- 01M635ZB -------------- - GatewayPlugin.cc:178"

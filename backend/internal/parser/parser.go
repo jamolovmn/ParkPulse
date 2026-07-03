@@ -14,9 +14,12 @@ import (
 
 type EventType string
 
+// Zanjir: ANPR (1) -> PERMIT/DB (2) -> PAYMENT/Logic (3) -> RELAY (4)
 const (
-	EventANPR  EventType = "ANPR"  // Raqam o'qildi
-	EventRelay EventType = "RELAY" // Ruxsat/to'lov (relay ochilishini bildiradi)
+	EventANPR    EventType = "ANPR"    // 1-qadam: raqam o'qildi
+	EventPermit  EventType = "PERMIT"  // 2-qadam: DB'dan ruxsat topildi
+	EventPayment EventType = "PAYMENT" // 3-qadam: to'lov jarayoni
+	EventRelay   EventType = "RELAY"   // 4-qadam: ruxsat/to'lov (relay ochilishi)
 )
 
 type Event struct {
@@ -31,7 +34,11 @@ type Event struct {
 var (
 	// ANPR: chiziqlar orasidagi davlat raqami: "-------- 01M635ZB --------"
 	reANPR = regexp.MustCompile(`-{3,}\s*([A-Z0-9]{5,10})\s*-{3,}`)
-	// Relay hodisasi: "Vendotek exit 1", "QR exit 2", "Vendotek enter 1" ...
+	// 2-qadam (DB): "Current permit found and assigned" / "Recent permit found and assigned"
+	rePermit = regexp.MustCompile(`(?i)\b(?:Current|Recent) permit found and assigned\b`)
+	// 3-qadam (Logic): "Processing payment"
+	rePayment = regexp.MustCompile(`(?i)\bProcessing payment\b`)
+	// 4-qadam: "Vendotek exit 1", "QR exit 2", "Vendotek enter 1" ...
 	reRelay = regexp.MustCompile(`(?i)\b(?:Vendotek|QR)\s+((?:enter|exit)\s+\d+)`)
 	// O'zbek davlat raqami: 01M635ZB yoki 01777ABC (kamida bitta harf bor,
 	// shuning uchun "(20000)" kabi summalarga yopishmaydi)
@@ -66,6 +73,14 @@ func Parse(container, line string) *Event {
 	if m := reANPR.FindStringSubmatch(msg); m != nil {
 		return &Event{Type: EventANPR, Timestamp: ts, Container: container, Plate: strings.ToUpper(m[1]), Raw: msg}
 	}
+	// Oraliq qadamlar relay'dan OLDIN tekshiriladi: "Processing payment" qatori
+	// ichida "Vendotek exit" uchrasa ham, u 3-qadam, relay emas.
+	if rePermit.MatchString(msg) {
+		return midStep(EventPermit, ts, container, msg)
+	}
+	if rePayment.MatchString(msg) {
+		return midStep(EventPayment, ts, container, msg)
+	}
 	if m := reRelay.FindStringSubmatch(msg); m != nil {
 		ev := &Event{
 			Type: EventRelay, Timestamp: ts, Container: container,
@@ -79,4 +94,14 @@ func Parse(container, line string) *Event {
 		return ev
 	}
 	return nil
+}
+
+// midStep oraliq qadam (PERMIT/PAYMENT) hodisasini yasaydi; qatorda raqam
+// bo'lsa oladi, bo'lmasa analyzer eng so'nggi ochiq sessiyaga bog'laydi.
+func midStep(t EventType, ts time.Time, container, msg string) *Event {
+	ev := &Event{Type: t, Timestamp: ts, Container: container, Raw: msg}
+	if p := rePlateToken.FindStringSubmatch(msg); p != nil {
+		ev.Plate = p[1]
+	}
+	return ev
 }

@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { useParkPulse, Pass, Ghost, Stats } from '@/lib/useParkPulse';
 
 const fmtTime = (iso: string) =>
@@ -68,6 +69,7 @@ function Kpi({ label, value, alert }: { label: string; value: string; alert?: bo
 }
 
 function LiveFeed({ passes }: { passes: Pass[] }) {
+  const [open, setOpen] = useState<string | null>(null);
   return (
     <section className="rounded-lg border border-line bg-surface lg:col-span-2">
       <h2 className="border-b border-line px-5 py-3.5 text-sm font-medium">
@@ -87,20 +89,39 @@ function LiveFeed({ passes }: { passes: Pass[] }) {
               </tr>
             </thead>
             <tbody>
-              {passes.map((p, i) => (
-                <tr key={`${p.relay_at}-${i}`} className="border-t border-grid">
-                  <td className="px-5 py-2.5 text-ink-secondary">{fmtTime(p.relay_at)}</td>
-                  <td className="px-5 py-2.5 font-medium">{p.plate}</td>
-                  <td className="px-5 py-2.5 text-ink-secondary">{p.gate || '—'}</td>
-                  <td
-                    className={`px-5 py-2.5 text-right ${
-                      p.latency_ms > 1500 ? 'text-warn' : 'text-ink-secondary'
+              {passes.map((p, i) => {
+                const key = `${p.relay_at}-${p.plate}-${i}`;
+                const expanded = open === key;
+                return (
+                  <tr
+                    key={key}
+                    onClick={() => p.breakdown && setOpen(expanded ? null : key)}
+                    className={`border-t border-grid ${
+                      p.breakdown ? 'cursor-pointer hover:bg-white/[0.03]' : ''
                     }`}
                   >
-                    {fmtMs(p.latency_ms)}
-                  </td>
-                </tr>
-              ))}
+                    <td className="px-5 py-2.5 align-top text-ink-secondary">
+                      {fmtTime(p.relay_at)}
+                    </td>
+                    <td className="px-5 py-2.5 align-top font-medium">{p.plate}</td>
+                    <td className="px-5 py-2.5 align-top text-ink-secondary">
+                      {p.gate || '—'}
+                    </td>
+                    <td className="px-5 py-2.5 text-right">
+                      <span
+                        className={p.latency_ms > 1500 ? 'text-warn' : 'text-ink-secondary'}
+                      >
+                        {fmtMs(p.latency_ms)}
+                      </span>
+                      {expanded && p.breakdown && (
+                        <div className="mt-1 whitespace-nowrap text-xs text-ink-muted">
+                          DB: {fmtMs(p.breakdown.db_ms)} · Logic: {fmtMs(p.breakdown.logic_ms)}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

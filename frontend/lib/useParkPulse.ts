@@ -3,7 +3,15 @@
 import { useEffect, useRef, useState } from 'react';
 
 export type Stats = { total_passes: number; avg_latency_ms: number; ghost_count: number };
-export type Pass = { plate: string; gate: string; anpr_at: string; relay_at: string; latency_ms: number };
+export type Breakdown = { db_ms: number; logic_ms: number };
+export type Pass = {
+  plate: string;
+  gate: string;
+  anpr_at: string;
+  relay_at: string;
+  latency_ms: number;
+  breakdown?: Breakdown;
+};
 export type Ghost = { plate?: string; gate: string; relay_at: string; raw: string };
 
 const LIMIT = 50;

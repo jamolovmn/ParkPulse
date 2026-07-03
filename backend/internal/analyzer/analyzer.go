@@ -1,10 +1,12 @@
-// Package analyzer ANPR va RELAY hodisalarini juftlashtiradi:
-//   - juftlik topilsa  -> PassEvent (latency ms bilan)
-//   - Relay juftsiz qolsa -> GhostEvent ("arvoh ochilish")
+// Package analyzer hodisalar zanjirini sessiyalarga yig'adi:
 //
-// Juftlashtirish birinchi navbatda mashina raqami (plate) bo'yicha — real p24
-// loglarida relay/to'lov qatorlarida raqam ham bor. Raqamsiz relay uchun eng
-// so'nggi ANPR fallback ishlatiladi.
+//	ANPR (1) -> PERMIT/DB (2) -> PAYMENT/Logic (3) -> RELAY (4)
+//
+//   - zanjir yakunlansa      -> PassEvent (total latency + breakdown)
+//   - RELAY juftsiz qolsa    -> GhostEvent ("arvoh ochilish")
+//
+// Juftlashtirish birinchi navbatda mashina raqami (plate) bo'yicha; raqamsiz
+// hodisalar oynadagi eng so'nggi ochiq sessiyaga bog'lanadi.
 package analyzer
 
 import (
@@ -23,12 +25,19 @@ const (
 	defaultGrace       = 3 * time.Second
 )
 
+// Breakdown — total latency'ning qadamlararo taqsimoti.
+type Breakdown struct {
+	DbMs    float64 `json:"db_ms"`    // 1-qadam (ANPR) -> 2-qadam (permit)
+	LogicMs float64 `json:"logic_ms"` // 2-qadam (permit) -> 4-qadam (relay)
+}
+
 type PassEvent struct {
-	Plate     string    `json:"plate"`
-	Gate      string    `json:"gate"`
-	AnprAt    time.Time `json:"anpr_at"`
-	RelayAt   time.Time `json:"relay_at"`
-	LatencyMs float64   `json:"latency_ms"`
+	Plate     string     `json:"plate"`
+	Gate      string     `json:"gate"`
+	AnprAt    time.Time  `json:"anpr_at"`
+	RelayAt   time.Time  `json:"relay_at"`
+	LatencyMs float64    `json:"latency_ms"`
+	Breakdown *Breakdown `json:"breakdown,omitempty"` // 2-qadam ko'rinmagan bo'lsa yo'q
 }
 
 type GhostEvent struct {
@@ -50,9 +59,12 @@ type Message struct {
 	Data any    `json:"data"`
 }
 
-type anprEntry struct {
-	ev     *parser.Event
-	seenAt time.Time // wall-clock, eskirganini o'chirish uchun
+// session — bitta mashinaning ochiq zanjiri (ANPR'dan relay'gacha).
+type session struct {
+	anpr      *parser.Event
+	permitAt  time.Time // 2-qadam vaqti (zero = hali ko'rinmadi)
+	paymentAt time.Time // 3-qadam vaqti
+	seenAt    time.Time // wall-clock, eskirganini o'chirish uchun
 }
 
 type pendingRelay struct {
@@ -66,7 +78,7 @@ type Analyzer struct {
 	window time.Duration
 	grace  time.Duration
 
-	lastANPR map[string]anprEntry // kalit: plate
+	sessions map[string]*session // kalit: plate
 	pending  []pendingRelay
 	// Bitta tranzaksiya bir nechta relay qatori chiqaradi ("already being
 	// processed" va h.k.) — bir key uchun oynada faqat bitta natija hisoblanadi.
@@ -80,7 +92,7 @@ func New() *Analyzer {
 		Out:         make(chan Message, 256),
 		window:      envDuration("MATCH_WINDOW_SEC", defaultMatchWindow),
 		grace:       envDuration("GRACE_SEC", defaultGrace),
-		lastANPR:    make(map[string]anprEntry),
+		sessions:    make(map[string]*session),
 		lastOutcome: make(map[string]time.Time),
 	}
 }
@@ -114,18 +126,29 @@ func (a *Analyzer) handle(ev *parser.Event) {
 		for i, p := range a.pending {
 			if plateMatch(ev.Plate, p.ev.Plate) {
 				a.pending = append(a.pending[:i], a.pending[i+1:]...)
-				a.emitPass(ev, p.ev)
+				a.emitPass(&session{anpr: ev}, p.ev)
 				return
 			}
 		}
-		a.lastANPR[ev.Plate] = anprEntry{ev: ev, seenAt: time.Now()}
+		a.sessions[ev.Plate] = &session{anpr: ev, seenAt: time.Now()}
+
+	case parser.EventPermit:
+		if s := a.findSession(ev); s != nil && s.permitAt.IsZero() {
+			s.permitAt = ev.Timestamp
+		}
+
+	case parser.EventPayment:
+		if s := a.findSession(ev); s != nil && s.paymentAt.IsZero() {
+			s.paymentAt = ev.Timestamp
+		}
+
 	case parser.EventRelay:
 		key := outcomeKey(ev)
 		if t, ok := a.lastOutcome[key]; ok && time.Since(t) < a.window {
 			return // shu tranzaksiya allaqachon hisoblangan — duplikat qator
 		}
-		if anpr := a.takeANPR(ev); anpr != nil {
-			a.emitPass(anpr, ev)
+		if s := a.takeSession(ev); s != nil {
+			a.emitPass(s, ev)
 		} else {
 			a.pending = append(a.pending, pendingRelay{ev: ev, receivedAt: time.Now()})
 		}
@@ -143,34 +166,49 @@ func plateMatch(anprPlate, relayPlate string) bool {
 	return relayPlate == "" || anprPlate == relayPlate
 }
 
-// takeANPR mos ANPR'ni qidiradi va topilsa o'chiradi (bitta ANPR bitta
-// ochilishni "oqlaydi"). Raqamli relay faqat o'z raqamini qabul qiladi.
-func (a *Analyzer) takeANPR(relay *parser.Event) *parser.Event {
-	if relay.Plate != "" {
-		if e, ok := a.lastANPR[relay.Plate]; ok && a.inWindow(e.ev, relay) {
-			delete(a.lastANPR, relay.Plate)
-			return e.ev
+// findSession hodisani sessiyaga bog'laydi: raqami bo'lsa — aynan o'sha,
+// bo'lmasa oynadagi eng so'nggi ochiq sessiya. Sessiya o'chirilmaydi.
+func (a *Analyzer) findSession(ev *parser.Event) *session {
+	if ev.Plate != "" {
+		if s, ok := a.sessions[ev.Plate]; ok && a.inWindow(s.anpr, ev) {
+			return s
 		}
 		return nil
 	}
-	// Raqamsiz relay: oynadagi eng so'nggi ANPR
+	if plate := a.latestPlate(ev); plate != "" {
+		return a.sessions[plate]
+	}
+	return nil
+}
+
+// takeSession relay uchun sessiyani oladi va o'chiradi (bitta ANPR bitta
+// ochilishni "oqlaydi"). Raqamli relay faqat o'z raqamini qabul qiladi.
+func (a *Analyzer) takeSession(relay *parser.Event) *session {
+	plate := relay.Plate
+	if plate == "" {
+		plate = a.latestPlate(relay)
+	}
+	if s, ok := a.sessions[plate]; ok && a.inWindow(s.anpr, relay) {
+		delete(a.sessions, plate)
+		return s
+	}
+	return nil
+}
+
+// latestPlate oynadagi eng so'nggi ANPR'li sessiya raqamini qaytaradi.
+func (a *Analyzer) latestPlate(ev *parser.Event) string {
 	var best string
-	for plate, e := range a.lastANPR {
-		if a.inWindow(e.ev, relay) &&
-			(best == "" || e.ev.Timestamp.After(a.lastANPR[best].ev.Timestamp)) {
+	for plate, s := range a.sessions {
+		if a.inWindow(s.anpr, ev) &&
+			(best == "" || s.anpr.Timestamp.After(a.sessions[best].anpr.Timestamp)) {
 			best = plate
 		}
 	}
-	if best == "" {
-		return nil
-	}
-	ev := a.lastANPR[best].ev
-	delete(a.lastANPR, best)
-	return ev
+	return best
 }
 
-func (a *Analyzer) inWindow(anpr, relay *parser.Event) bool {
-	d := relay.Timestamp.Sub(anpr.Timestamp)
+func (a *Analyzer) inWindow(anpr, ev *parser.Event) bool {
+	d := ev.Timestamp.Sub(anpr.Timestamp)
 	return d >= 0 && d <= a.window
 }
 
@@ -191,9 +229,9 @@ func (a *Analyzer) expire(now time.Time) {
 	a.pending = kept
 
 	// Eski yozuvlarni tozalash (xotira oqib ketmasin)
-	for plate, e := range a.lastANPR {
-		if now.Sub(e.seenAt) > a.window+time.Minute {
-			delete(a.lastANPR, plate)
+	for plate, s := range a.sessions {
+		if now.Sub(s.seenAt) > a.window+time.Minute {
+			delete(a.sessions, plate)
 		}
 	}
 	for key, t := range a.lastOutcome {
@@ -203,17 +241,29 @@ func (a *Analyzer) expire(now time.Time) {
 	}
 }
 
-func (a *Analyzer) emitPass(anpr, relay *parser.Event) {
-	ms := float64(relay.Timestamp.Sub(anpr.Timestamp)) / float64(time.Millisecond)
+func (a *Analyzer) emitPass(s *session, relay *parser.Event) {
+	total := durMs(relay.Timestamp.Sub(s.anpr.Timestamp))
+	var br *Breakdown
+	if !s.permitAt.IsZero() {
+		br = &Breakdown{
+			DbMs:    durMs(s.permitAt.Sub(s.anpr.Timestamp)),
+			LogicMs: durMs(relay.Timestamp.Sub(s.permitAt)),
+		}
+	}
 	a.stats.TotalPasses++
-	a.sumMs += ms
+	a.sumMs += total
 	a.stats.AvgLatencyMs = a.sumMs / float64(a.stats.TotalPasses)
 	a.lastOutcome[outcomeKey(relay)] = time.Now()
 	a.Out <- Message{Type: "pass", Data: PassEvent{
-		Plate: anpr.Plate, Gate: relay.Gate,
-		AnprAt: anpr.Timestamp, RelayAt: relay.Timestamp, LatencyMs: ms,
+		Plate: s.anpr.Plate, Gate: relay.Gate,
+		AnprAt: s.anpr.Timestamp, RelayAt: relay.Timestamp,
+		LatencyMs: total, Breakdown: br,
 	}}
 	a.emitStats()
+}
+
+func durMs(d time.Duration) float64 {
+	return float64(d) / float64(time.Millisecond)
 }
 
 func (a *Analyzer) emitStats() {
