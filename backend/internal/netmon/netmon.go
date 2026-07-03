@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"parkpulse/backend/internal/analyzer"
@@ -104,7 +105,7 @@ func (m *Monitor) tick(ctx context.Context) {
 		go func(ip string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			rtt, alive := ping(ctx, ip)
+			rtt, alive := checkAlive(ctx, ip)
 			var needFP bool
 			m.mu.Lock()
 			if d, ok := m.devices[ip]; ok {
@@ -232,6 +233,19 @@ func httpVendor(ctx context.Context, ip string, ports []int) string {
 
 var reRtt = regexp.MustCompile(`time=([0-9.]+) ms`)
 
+// Ko'p qurilma (ayniqsa kameralar) ICMP'ni bloklaydi. Ping javob bermasa
+// shu portlarga TCP urinib ko'ramiz — biror javob bo'lsa qurilma TIRIK.
+var livePorts = []int{80, 554, 8000, 443, 37777}
+
+// checkAlive qurilma holatini aniqlaydi: avval ICMP ping, javob bo'lmasa TCP.
+// Shu tufayli ping'ni bloklaydigan qurilma "uzilgan" deb belgilanmaydi.
+func checkAlive(ctx context.Context, ip string) (rttMs float64, alive bool) {
+	if rtt, ok := ping(ctx, ip); ok {
+		return rtt, true
+	}
+	return tcpPing(ctx, ip, livePorts)
+}
+
 // ping bitta ICMP so'rov yuboradi (busybox/iputils ping, konteyner root'da ishlaydi).
 func ping(ctx context.Context, ip string) (rttMs float64, alive bool) {
 	cctx, cancel := context.WithTimeout(ctx, pingTimeout)
@@ -245,6 +259,38 @@ func ping(ctx context.Context, ip string) (rttMs float64, alive bool) {
 		return v, true
 	}
 	return 0, true
+}
+
+// tcpPing portlarga ulanishga urinadi. Ulanish OCHILSA yoki "connection
+// refused" (port yopiq, lekin qurilma javob berdi) bo'lsa — qurilma tirik.
+// Faqat timeout/no-route bo'lsa o'lik deb hisoblanadi.
+func tcpPing(ctx context.Context, ip string, ports []int) (float64, bool) {
+	cctx, cancel := context.WithTimeout(ctx, pingTimeout)
+	defer cancel()
+	type hit struct{ rtt float64 }
+	ch := make(chan hit, len(ports))
+	var wg sync.WaitGroup
+	for _, p := range ports {
+		wg.Add(1)
+		go func(port int) {
+			defer wg.Done()
+			t0 := time.Now()
+			d := net.Dialer{}
+			c, err := d.DialContext(cctx, "tcp", net.JoinHostPort(ip, strconv.Itoa(port)))
+			rtt := float64(time.Since(t0)) / float64(time.Millisecond)
+			if err == nil {
+				c.Close()
+				ch <- hit{rtt}
+			} else if errors.Is(err, syscall.ECONNREFUSED) {
+				ch <- hit{rtt} // qurilma bor, faqat port yopiq
+			}
+		}(p)
+	}
+	go func() { wg.Wait(); close(ch) }()
+	if h, ok := <-ch; ok {
+		return h.rtt, true
+	}
+	return 0, false
 }
 
 // Scan subnet'dagi tirik qurilmalarni topib ro'yxatga qo'shadi.
@@ -285,7 +331,7 @@ func (m *Monitor) Scan(ctx context.Context, subnet string) ([]Device, error) {
 		go func(ip string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if rtt, alive := ping(ctx, ip); alive {
+			if rtt, alive := checkAlive(ctx, ip); alive {
 				typ, vendor, ports := fingerprint(ctx, ip)
 				m.mu.Lock()
 				if _, ok := m.devices[ip]; !ok {
