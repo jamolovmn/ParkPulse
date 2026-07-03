@@ -6,7 +6,8 @@ import { useParkPulse, Pass, Ghost, Stats } from '@/lib/useParkPulse';
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleTimeString('uz-UZ', { hour12: false });
 
-const fmtMs = (ms: number) => `${Math.round(ms)} ms`;
+// Zanjir qadamlari juda tez (0.1-15ms) — kichik qiymatlarda kasr ko'rsatamiz
+const fmtMs = (ms: number) => `${ms < 10 ? ms.toFixed(1) : String(Math.round(ms))} ms`;
 
 export default function Dashboard() {
   const { connected, stats, passes, ghosts } = useParkPulse();
@@ -115,7 +116,7 @@ function LiveFeed({ passes }: { passes: Pass[] }) {
                       </span>
                       {expanded && p.breakdown && (
                         <div className="mt-1 whitespace-nowrap text-xs text-ink-muted">
-                          DB: {fmtMs(p.breakdown.db_ms)} · Logic: {fmtMs(p.breakdown.logic_ms)}
+                          Gateway: {fmtMs(p.breakdown.gateway_ms)} · DB: {fmtMs(p.breakdown.db_ms)} · POS: {fmtMs(p.breakdown.pos_ms)}
                         </div>
                       )}
                     </td>

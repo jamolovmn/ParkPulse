@@ -37,27 +37,40 @@ func findPass(t *testing.T, msgs []Message) PassEvent {
 	return PassEvent{}
 }
 
-// To'liq zanjir: ANPR -> permit(+20ms) -> payment -> relay. Breakdown to'g'ri bo'lishi kerak.
+// To'liq zanjir (real vaqtlar bilan): ANPR -> gateway(+0.2ms) -> permit(+12ms) -> relay(+0.8ms).
 func TestChainBreakdown(t *testing.T) {
 	a := New()
-	a.handle(ev(parser.EventANPR, "01M635ZB", "", t0))
-	a.handle(ev(parser.EventPermit, "", "", t0.Add(20*time.Millisecond)))
-	a.handle(ev(parser.EventPayment, "", "", t0.Add(86200*time.Millisecond)))
-	a.handle(ev(parser.EventRelay, "01M635ZB", "exit 1", t0.Add(86330*time.Millisecond)))
+	a.handle(ev(parser.EventANPR, "60X339HB", "", t0))
+	a.handle(ev(parser.EventGateway, "", "", t0.Add(200*time.Microsecond)))
+	a.handle(ev(parser.EventPermit, "", "", t0.Add(12200*time.Microsecond)))
+	a.handle(ev(parser.EventRelay, "60X339HB", "exit 1", t0.Add(13000*time.Microsecond)))
 
 	p := findPass(t, drain(a))
-	if p.LatencyMs != 86330 {
-		t.Errorf("total = %v, kutilgan 86330", p.LatencyMs)
+	if p.LatencyMs != 13 {
+		t.Errorf("total = %v, kutilgan 13", p.LatencyMs)
 	}
 	if p.Breakdown == nil {
 		t.Fatal("breakdown yo'q")
 	}
-	if p.Breakdown.DbMs != 20 || p.Breakdown.LogicMs != 86310 {
-		t.Errorf("breakdown = %+v, kutilgan db=20 logic=86310", p.Breakdown)
+	if p.Breakdown.GatewayMs != 0.2 || p.Breakdown.DbMs != 12 || p.Breakdown.PosMs != 0.8 {
+		t.Errorf("breakdown = %+v, kutilgan gateway=0.2 db=12 pos=0.8", p.Breakdown)
 	}
 }
 
-// 2-qadam ko'rinmasa breakdown bo'lmaydi, lekin pass baribir chiqadi.
+// Gateway qatori bo'lmasa DB vaqti ANPR'dan hisoblanadi.
+func TestChainNoGateway(t *testing.T) {
+	a := New()
+	a.handle(ev(parser.EventANPR, "60X339HB", "", t0))
+	a.handle(ev(parser.EventPermit, "", "", t0.Add(12*time.Millisecond)))
+	a.handle(ev(parser.EventRelay, "60X339HB", "exit 1", t0.Add(13*time.Millisecond)))
+
+	p := findPass(t, drain(a))
+	if p.Breakdown == nil || p.Breakdown.GatewayMs != 0 || p.Breakdown.DbMs != 12 {
+		t.Errorf("breakdown = %+v, kutilgan gateway=0 db=12", p.Breakdown)
+	}
+}
+
+// Permit ko'rinmasa breakdown bo'lmaydi, lekin pass baribir chiqadi.
 func TestNoPermitNoBreakdown(t *testing.T) {
 	a := New()
 	a.handle(ev(parser.EventANPR, "01M635ZB", "", t0))

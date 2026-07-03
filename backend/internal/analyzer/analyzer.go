@@ -1,6 +1,6 @@
 // Package analyzer hodisalar zanjirini sessiyalarga yig'adi:
 //
-//	ANPR (1) -> PERMIT/DB (2) -> PAYMENT/Logic (3) -> RELAY (4)
+//	ANPR (1) -> GATEWAY (2) -> PERMIT/DB (3) -> RELAY/POS (4)
 //
 //   - zanjir yakunlansa      -> PassEvent (total latency + breakdown)
 //   - RELAY juftsiz qolsa    -> GhostEvent ("arvoh ochilish")
@@ -27,8 +27,9 @@ const (
 
 // Breakdown — total latency'ning qadamlararo taqsimoti.
 type Breakdown struct {
-	DbMs    float64 `json:"db_ms"`    // 1-qadam (ANPR) -> 2-qadam (permit)
-	LogicMs float64 `json:"logic_ms"` // 2-qadam (permit) -> 4-qadam (relay)
+	GatewayMs float64 `json:"gateway_ms"` // ANPR -> gateway ishga tushdi
+	DbMs      float64 `json:"db_ms"`      // gateway -> DB javobi (permit)
+	PosMs     float64 `json:"pos_ms"`     // DB -> POS'ga buyruq (relay)
 }
 
 type PassEvent struct {
@@ -62,8 +63,8 @@ type Message struct {
 // session — bitta mashinaning ochiq zanjiri (ANPR'dan relay'gacha).
 type session struct {
 	anpr      *parser.Event
-	permitAt  time.Time // 2-qadam vaqti (zero = hali ko'rinmadi)
-	paymentAt time.Time // 3-qadam vaqti
+	gatewayAt time.Time // 2-qadam vaqti (zero = hali ko'rinmadi)
+	permitAt  time.Time // 3-qadam vaqti
 	seenAt    time.Time // wall-clock, eskirganini o'chirish uchun
 }
 
@@ -132,14 +133,14 @@ func (a *Analyzer) handle(ev *parser.Event) {
 		}
 		a.sessions[ev.Plate] = &session{anpr: ev, seenAt: time.Now()}
 
+	case parser.EventGateway:
+		if s := a.findSession(ev); s != nil && s.gatewayAt.IsZero() {
+			s.gatewayAt = ev.Timestamp
+		}
+
 	case parser.EventPermit:
 		if s := a.findSession(ev); s != nil && s.permitAt.IsZero() {
 			s.permitAt = ev.Timestamp
-		}
-
-	case parser.EventPayment:
-		if s := a.findSession(ev); s != nil && s.paymentAt.IsZero() {
-			s.paymentAt = ev.Timestamp
 		}
 
 	case parser.EventRelay:
@@ -245,9 +246,17 @@ func (a *Analyzer) emitPass(s *session, relay *parser.Event) {
 	total := durMs(relay.Timestamp.Sub(s.anpr.Timestamp))
 	var br *Breakdown
 	if !s.permitAt.IsZero() {
+		// Gateway qatori ko'rinmagan bo'lsa DB vaqti to'g'ridan ANPR'dan boshlanadi
+		dbFrom := s.anpr.Timestamp
+		var gwMs float64
+		if !s.gatewayAt.IsZero() {
+			gwMs = durMs(s.gatewayAt.Sub(s.anpr.Timestamp))
+			dbFrom = s.gatewayAt
+		}
 		br = &Breakdown{
-			DbMs:    durMs(s.permitAt.Sub(s.anpr.Timestamp)),
-			LogicMs: durMs(relay.Timestamp.Sub(s.permitAt)),
+			GatewayMs: gwMs,
+			DbMs:      durMs(s.permitAt.Sub(dbFrom)),
+			PosMs:     durMs(relay.Timestamp.Sub(s.permitAt)),
 		}
 	}
 	a.stats.TotalPasses++

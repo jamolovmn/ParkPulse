@@ -51,8 +51,8 @@ func TestParseRelayUidProcessed(t *testing.T) {
 
 func TestParseRelayQRAndEnter(t *testing.T) {
 	for line, gate := range map[string]string{
-		"20260703 13:02:01.000001 UTC 1 DEBUG [handleCommand] QR exit 2: Access granted: 01Y765NC - POSWorker.cpp:44":    "exit 2",
-		"20260703 13:02:05.000001 UTC 1 DEBUG [handleCommand] Vendotek enter 1: Requesting: 01Y765NC - POSWorker.cpp:44": "enter 1",
+		"20260703 14:41:54.697386 UTC 1 DEBUG [handleCommand] QR exit 2: The uid is already being processed: 01H351LC - POSWorker.cpp:44": "exit 2",
+		"20260703 13:02:05.000001 UTC 1 DEBUG [makePayment] Vendotek enter 1: Requesting payment: 01Y765NC (20000) - POSWorker.cpp:67":    "enter 1",
 	} {
 		ev := Parse("p24gui", line)
 		if ev == nil || ev.Type != EventRelay || ev.Gate != gate {
@@ -62,20 +62,18 @@ func TestParseRelayQRAndEnter(t *testing.T) {
 }
 
 func TestParseMidSteps(t *testing.T) {
+	// Hammasi haqiqiy p24 loglaridan
 	for line, typ := range map[string]EventType{
-		"20260703 12:59:02.085187 UTC 1 DEBUG [findPermit] Current permit found and assigned - GatewayPlugin.cc:210": EventPermit,
-		"20260703 12:59:02.090187 UTC 1 DEBUG [findPermit] Recent permit found and assigned - GatewayPlugin.cc:215":  EventPermit,
-		"20260703 13:00:27.995886 UTC 1 DEBUG [makePayment] Processing payment - POSWorker.cpp:60":                   EventPayment,
+		"20260703 14:40:06.704351 UTC 1 DEBUG [operator()] In flight mode started - GatewayPlugin.cc:196":            EventGateway,
+		"20260703 14:40:40.798688 UTC 1 DEBUG [operator()] Recent permit found and assigned - GatewayPlugin.cc:191":  EventGateway,
+		"20260703 14:40:06.716335 UTC 1 DEBUG [operator()] Current permit found and assigned - GatewayPlugin.cc:205": EventPermit,
+		"20260703 14:40:39.797629 UTC 1 DEBUG [operator()] Permit created - GatewayPlugin.cc:220":                    EventPermit,
+		"20260703 14:40:50.332676 UTC 1 DEBUG [operator()] Permit visit created - GatewayPlugin.cc:249":              EventPermit,
 	} {
 		ev := Parse("p24gui", line)
 		if ev == nil || ev.Type != typ {
-			t.Errorf("qadam aniqlanmadi (%q): %+v", line, ev)
+			t.Errorf("qadam aniqlanmadi (%q): kutilgan %s, olindi %+v", line, typ, ev)
 		}
-	}
-	// "Processing payment" ichida Vendotek bo'lsa ham bu 3-qadam, relay emas
-	ev := Parse("p24gui", "20260703 13:00:27.995886 UTC 1 DEBUG [makePayment] Vendotek exit 1: Processing payment: 01M635ZB - POSWorker.cpp:60")
-	if ev == nil || ev.Type != EventPayment || ev.Plate != "01M635ZB" {
-		t.Errorf("payment ustuvorligi buzildi: %+v", ev)
 	}
 }
 
@@ -93,8 +91,13 @@ func TestParseWithDockerPrefix(t *testing.T) {
 
 func TestParseIgnoresNoise(t *testing.T) {
 	for _, line := range []string{
-		"20260703 13:01:10.254157 UTC 138 WARN  Relay exit 2: Connection is closed - RelayWorker.cpp:57", // endi hodisa emas
-		"20260703 13:01:12.000000 UTC 5 INFO  Heartbeat ok - Main.cpp:10",
+		// Relay heartbeat xatosi — access hodisasi emas
+		"20260703 14:40:04.450749 UTC 138 WARN  Relay exit 2: Connection is closed - RelayWorker.cpp:57",
+		// POS terminal holatlari — "Vendotek exit" bor, lekin relay buyruq EMAS
+		"20260703 14:40:06.929108 UTC 121 WARN  Vendotek exit 1: Processing payment - POSWorker.cpp:78",
+		"20260703 14:40:39.025699 UTC 121 DEBUG [operator()] Vendotek exit 1: VRP canceled - VTKPOSWorker.cpp:239",
+		"20260703 14:40:39.931783 UTC 121 WARN  Vendotek exit 1: Idle state - POSWorker.cpp:78",
+		"20260703 14:40:59.266141 UTC 1 ERROR 500: Network failure - GatewayPlugin.cc:425",
 		"random text without keywords",
 	} {
 		if ev := Parse("p24gui", line); ev != nil {

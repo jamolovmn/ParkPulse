@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 export type Stats = { total_passes: number; avg_latency_ms: number; ghost_count: number };
-export type Breakdown = { db_ms: number; logic_ms: number };
+export type Breakdown = { gateway_ms: number; db_ms: number; pos_ms: number };
 export type Pass = {
   plate: string;
   gate: string;
