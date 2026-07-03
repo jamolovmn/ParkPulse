@@ -6,9 +6,12 @@ package netmon
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
@@ -20,6 +23,8 @@ import (
 
 	"parkpulse/backend/internal/analyzer"
 )
+
+func insecureTLS() *tls.Config { return &tls.Config{InsecureSkipVerify: true} }
 
 const (
 	pingInterval = 10 * time.Second
@@ -34,6 +39,10 @@ type Device struct {
 	Alive    bool      `json:"alive"`
 	RttMs    float64   `json:"rtt_ms"`
 	LastSeen time.Time `json:"last_seen,omitempty"` // oxirgi javob bergan vaqti
+	Type     string    `json:"type,omitempty"`      // avto aniqlangan: Kamera/Web/Noma'lum
+	Vendor   string    `json:"vendor,omitempty"`    // HTTP izidan (Hikvision, Dahua...)
+	Ports    []int     `json:"ports,omitempty"`     // ochiq portlar
+	probed   bool      // fingerprint bir marta bajarildi
 }
 
 type Monitor struct {
@@ -96,18 +105,129 @@ func (m *Monitor) tick(ctx context.Context) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			rtt, alive := ping(ctx, ip)
+			var needFP bool
 			m.mu.Lock()
 			if d, ok := m.devices[ip]; ok {
 				d.Alive, d.RttMs = alive, rtt
 				if alive {
 					d.LastSeen = time.Now()
+					needFP = !d.probed
 				}
 			}
 			m.mu.Unlock()
+			// Tur avtomatik aniqlanadi — tirik va hali skanerlanmagan bo'lsa
+			if needFP {
+				typ, vendor, ports := fingerprint(ctx, ip)
+				m.mu.Lock()
+				if d, ok := m.devices[ip]; ok {
+					d.Type, d.Vendor, d.Ports, d.probed = typ, vendor, ports, true
+				}
+				m.mu.Unlock()
+			}
 		}(ip)
 	}
 	wg.Wait()
 	m.emit()
+}
+
+// Fingerprint uchun tekshiriladigan portlar (qurilma turini bildiradi).
+var probePorts = []int{80, 443, 554, 8000, 37777, 34567}
+
+// HTTP javobidan ishlab chiqaruvchini taxmin qiluvchi izlar.
+var vendorHints = map[string]*regexp.Regexp{
+	"Hikvision":  regexp.MustCompile(`(?i)hikvision|app-webs|dvrdvs|web service`),
+	"Dahua":      regexp.MustCompile(`(?i)dahua|webserver|/current_config`),
+	"Axis":       regexp.MustCompile(`(?i)axis`),
+	"Boa/IP-cam": regexp.MustCompile(`(?i)server:\s*boa`),
+}
+
+// fingerprint qurilmaning ochiq portlarini skanerlab, turini aniqlaydi.
+// Bir marta bajariladi (natija saqlanadi) — ping tick'da qayta ishlamaydi.
+func fingerprint(ctx context.Context, ip string) (typ, vendor string, ports []int) {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for _, p := range probePorts {
+		wg.Add(1)
+		go func(port int) {
+			defer wg.Done()
+			d := net.Dialer{Timeout: 500 * time.Millisecond}
+			c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(ip, strconv.Itoa(port)))
+			if err != nil {
+				return
+			}
+			c.Close()
+			mu.Lock()
+			ports = append(ports, port)
+			mu.Unlock()
+		}(p)
+	}
+	wg.Wait()
+	sort.Ints(ports)
+
+	vendor = httpVendor(ctx, ip, ports)
+	typ = classify(ports, vendor)
+	return
+}
+
+func classify(ports []int, vendor string) string {
+	has := func(p int) bool {
+		for _, x := range ports {
+			if x == p {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has(554) || has(37777) || has(34567) || has(8000):
+		return "Kamera" // RTSP/ONVIF/Dahua/DVR portlari
+	case vendor != "":
+		return "Kamera" // HTTP izi kamera ishlab chiqaruvchisini ko'rsatdi
+	case has(80) || has(443):
+		return "Web qurilma"
+	case len(ports) > 0:
+		return "Ochiq portli qurilma"
+	default:
+		return "Noma'lum"
+	}
+}
+
+// httpVendor 80/443 portidan javob olib, ishlab chiqaruvchini taxmin qiladi.
+func httpVendor(ctx context.Context, ip string, ports []int) string {
+	scheme := ""
+	for _, p := range ports {
+		if p == 80 {
+			scheme = "http"
+			break
+		}
+		if p == 443 {
+			scheme = "https"
+		}
+	}
+	if scheme == "" {
+		return ""
+	}
+	cctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, http.MethodGet, scheme+"://"+ip+"/", nil)
+	if err != nil {
+		return ""
+	}
+	tr := &http.Transport{TLSClientConfig: insecureTLS(), DisableKeepAlives: true}
+	client := &http.Client{Transport: tr}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	blob := "server: " + resp.Header.Get("Server") + " " + resp.Header.Get("WWW-Authenticate") + " " + string(body)
+	for name, re := range vendorHints {
+		if re.MatchString(blob) {
+			return name
+		}
+	}
+	return ""
 }
 
 var reRtt = regexp.MustCompile(`time=([0-9.]+) ms`)
@@ -166,12 +286,14 @@ func (m *Monitor) Scan(ctx context.Context, subnet string) ([]Device, error) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			if rtt, alive := ping(ctx, ip); alive {
+				typ, vendor, ports := fingerprint(ctx, ip)
 				m.mu.Lock()
 				if _, ok := m.devices[ip]; !ok {
 					m.devices[ip] = &Device{Name: ip, IP: ip}
 				}
 				d := m.devices[ip]
 				d.Alive, d.RttMs, d.LastSeen = true, rtt, time.Now()
+				d.Type, d.Vendor, d.Ports, d.probed = typ, vendor, ports, true
 				m.mu.Unlock()
 			}
 		}(ip)

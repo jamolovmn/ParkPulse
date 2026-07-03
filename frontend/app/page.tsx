@@ -130,12 +130,22 @@ function DevicePanel({ devices }: { devices: Device[] }) {
               <span
                 className={`h-2 w-2 shrink-0 rounded-full ${d.alive ? 'bg-good' : 'bg-critical'}`}
               />
-              <span className="truncate font-medium">{d.name}</span>
-              {d.name !== d.ip && (
-                <span className="truncate text-xs text-ink-muted">{d.ip}</span>
-              )}
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="truncate font-medium">{d.name}</span>
+                  {d.type && (
+                    <span className="shrink-0 rounded border border-line px-1.5 py-0.5 text-[10px] text-ink-muted">
+                      {d.type}
+                      {d.vendor ? ` · ${d.vendor}` : ''}
+                    </span>
+                  )}
+                </div>
+                {d.name !== d.ip && (
+                  <span className="text-xs text-ink-muted">{d.ip}</span>
+                )}
+              </div>
               <span
-                className={`ml-auto shrink-0 text-xs [font-variant-numeric:tabular-nums] ${
+                className={`shrink-0 text-xs [font-variant-numeric:tabular-nums] ${
                   d.alive ? 'text-ink-secondary' : 'text-critical'
                 }`}
               >

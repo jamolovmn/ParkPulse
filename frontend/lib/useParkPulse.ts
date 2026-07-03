@@ -26,6 +26,9 @@ export type Device = {
   alive: boolean;
   rtt_ms: number;
   last_seen?: string;
+  type?: string; // avto aniqlangan: Kamera / Web qurilma / Noma'lum
+  vendor?: string; // Hikvision, Dahua...
+  ports?: number[];
 };
 
 const LIMIT = 50;
