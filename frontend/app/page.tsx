@@ -132,6 +132,7 @@ function GhostList({ ghosts }: { ghosts: Ghost[] }) {
               </div>
               <p className="mt-1 text-xs text-ink-secondary">
                 Darvoza: {g.gate || 'noma’lum'}
+                {g.plate ? ` · Raqam: ${g.plate}` : ''}
               </p>
               <p className="mt-1 truncate font-mono text-xs text-ink-muted" title={g.raw}>
                 {g.raw}
