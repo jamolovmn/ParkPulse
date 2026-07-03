@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { useParkPulse, Pass, Ghost, Stats } from '@/lib/useParkPulse';
+import { Fragment, useState } from 'react';
+import { useParkPulse, Breakdown, Pass, Ghost, Stats } from '@/lib/useParkPulse';
 
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleTimeString('uz-UZ', { hour12: false });
@@ -94,33 +94,32 @@ function LiveFeed({ passes }: { passes: Pass[] }) {
                 const key = `${p.relay_at}-${p.plate}-${i}`;
                 const expanded = open === key;
                 return (
-                  <tr
-                    key={key}
-                    onClick={() => p.breakdown && setOpen(expanded ? null : key)}
-                    className={`border-t border-grid ${
-                      p.breakdown ? 'cursor-pointer hover:bg-white/[0.03]' : ''
-                    }`}
-                  >
-                    <td className="px-5 py-2.5 align-top text-ink-secondary">
-                      {fmtTime(p.relay_at)}
-                    </td>
-                    <td className="px-5 py-2.5 align-top font-medium">{p.plate}</td>
-                    <td className="px-5 py-2.5 align-top text-ink-secondary">
-                      {p.gate || '—'}
-                    </td>
-                    <td className="px-5 py-2.5 text-right">
-                      <span
-                        className={p.latency_ms > 1500 ? 'text-warn' : 'text-ink-secondary'}
+                  <Fragment key={key}>
+                    <tr
+                      onClick={() => p.breakdown && setOpen(expanded ? null : key)}
+                      className={`border-t border-grid ${
+                        p.breakdown ? 'cursor-pointer hover:bg-white/[0.03]' : ''
+                      }`}
+                    >
+                      <td className="px-5 py-2.5 text-ink-secondary">{fmtTime(p.relay_at)}</td>
+                      <td className="px-5 py-2.5 font-medium">{p.plate}</td>
+                      <td className="px-5 py-2.5 text-ink-secondary">{p.gate || '—'}</td>
+                      <td
+                        className={`px-5 py-2.5 text-right ${
+                          p.latency_ms > 1500 ? 'text-warn' : 'text-ink-secondary'
+                        }`}
                       >
                         {fmtMs(p.latency_ms)}
-                      </span>
-                      {expanded && p.breakdown && (
-                        <div className="mt-1 whitespace-nowrap text-xs text-ink-muted">
-                          Gateway: {fmtMs(p.breakdown.gateway_ms)} · DB: {fmtMs(p.breakdown.db_ms)} · POS: {fmtMs(p.breakdown.pos_ms)}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
+                      </td>
+                    </tr>
+                    {expanded && p.breakdown && (
+                      <tr className="bg-white/[0.02]">
+                        <td colSpan={4} className="px-5 pb-3 pt-1">
+                          <Chain breakdown={p.breakdown} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -131,9 +130,35 @@ function LiveFeed({ passes }: { passes: Pass[] }) {
   );
 }
 
-function GhostList({ ghosts }: { ghosts: Ghost[] }) {
+// Zanjir qadamlari: ANPR —ms→ Gateway —ms→ DB —ms→ Relay
+function Chain({ breakdown: b }: { breakdown: Breakdown }) {
+  const nodes = ['ANPR', 'Gateway', 'DB', 'Relay'];
+  const times = [b.gateway_ms, b.db_ms, b.pos_ms];
   return (
-    <section className="rounded-lg border border-line bg-surface">
+    <div className="flex flex-wrap items-center gap-1.5 text-xs [font-variant-numeric:tabular-nums]">
+      {nodes.map((n, i) => (
+        <Fragment key={n}>
+          <span className="rounded-md border border-line px-2 py-0.5 font-medium text-ink-secondary">
+            {n}
+          </span>
+          {i < times.length && (
+            <span className="flex items-center gap-1 text-ink-muted">
+              <span aria-hidden>—</span>
+              <span>{fmtMs(times[i])}</span>
+              <span aria-hidden>→</span>
+            </span>
+          )}
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+function GhostList({ ghosts }: { ghosts: Ghost[] }) {
+  const [open, setOpen] = useState<string | null>(null);
+  return (
+    // self-start: bo'sh panel jonli oqim bilan teng cho'zilib ketmasin
+    <section className="self-start rounded-lg border border-line bg-surface">
       <h2 className="border-b border-line px-5 py-3.5 text-sm font-medium">
         Arvoh ochilishlar
       </h2>
@@ -141,26 +166,45 @@ function GhostList({ ghosts }: { ghosts: Ghost[] }) {
         <Empty text="Arvoh ochilish yo'q" />
       ) : (
         <ul className="divide-y divide-grid">
-          {ghosts.map((g, i) => (
-            <li key={`${g.relay_at}-${i}`} className="px-5 py-3">
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-critical" aria-hidden>
-                  ▲
-                </span>
-                <span className="font-medium text-critical">ANPR'siz ochilish</span>
-                <span className="ml-auto text-xs text-ink-muted [font-variant-numeric:tabular-nums]">
-                  {fmtTime(g.relay_at)}
-                </span>
-              </div>
-              <p className="mt-1 text-xs text-ink-secondary">
-                Darvoza: {g.gate || 'noma’lum'}
-                {g.plate ? ` · Raqam: ${g.plate}` : ''}
-              </p>
-              <p className="mt-1 truncate font-mono text-xs text-ink-muted" title={g.raw}>
-                {g.raw}
-              </p>
-            </li>
-          ))}
+          {ghosts.map((g, i) => {
+            const key = `${g.relay_at}-${i}`;
+            const expanded = open === key;
+            const hasContext = (g.context?.length ?? 0) > 0;
+            return (
+              <li
+                key={key}
+                onClick={() => hasContext && setOpen(expanded ? null : key)}
+                className={`px-5 py-3 ${hasContext ? 'cursor-pointer hover:bg-white/[0.03]' : ''}`}
+              >
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-critical" aria-hidden>
+                    ▲
+                  </span>
+                  <span className="font-medium text-critical">ANPR'siz ochilish</span>
+                  <span className="ml-auto text-xs text-ink-muted [font-variant-numeric:tabular-nums]">
+                    {fmtTime(g.relay_at)}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-ink-secondary">
+                  Darvoza: {g.gate || 'noma’lum'}
+                  {g.plate ? ` · Raqam: ${g.plate}` : ''}
+                </p>
+                <p className="mt-1 truncate font-mono text-xs text-ink-muted" title={g.raw}>
+                  {g.raw}
+                </p>
+                {hasContext && (
+                  <p className="mt-1.5 text-xs text-ink-muted">
+                    {expanded ? '▾ Kontekst (o‘sha paytdagi loglar)' : '▸ Kontekstni ko‘rish'}
+                  </p>
+                )}
+                {expanded && hasContext && (
+                  <pre className="mt-2 max-h-48 overflow-auto rounded-md border border-grid bg-page p-3 text-[11px] leading-relaxed text-ink-muted">
+                    {g.context!.join('\n')}
+                  </pre>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

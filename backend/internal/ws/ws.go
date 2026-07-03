@@ -7,13 +7,22 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 
 	"parkpulse/backend/internal/analyzer"
 )
 
-const historyLimit = 50 // snapshot'da saqlanadigan so'nggi hodisalar soni
+const (
+	historyLimit = 50 // snapshot'da saqlanadigan so'nggi hodisalar soni
+
+	// Oradagi proxy'lar (ioEdge va h.k.) jim turgan ulanishni ~60s da uzadi.
+	// Server har 30s da ping yuboradi — ulanish doim "tirik" qoladi.
+	pingInterval = 30 * time.Second
+	pongWait     = 75 * time.Second
+	writeWait    = 10 * time.Second
+)
 
 var upgrader = websocket.Upgrader{
 	// Dashboard boshqa port/domenda ishlaydi — origin tekshirmaymiz.
@@ -99,7 +108,11 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// O'qish goroutine'i faqat klient uzilganini sezish uchun.
+	// O'qish goroutine'i klient uzilganini sezadi va pong'larni qabul qiladi.
+	conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(pongWait))
+	})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -111,11 +124,19 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	log.Printf("[ws] klient ulandi: %s", r.RemoteAddr)
+	ping := time.NewTicker(pingInterval)
+	defer ping.Stop()
 	for {
 		select {
 		case <-done:
 			return
+		case <-ping.C:
+			conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 		case msg := <-ch:
+			conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := conn.WriteJSON(msg); err != nil {
 				return
 			}

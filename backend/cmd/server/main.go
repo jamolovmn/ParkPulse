@@ -12,6 +12,7 @@ import (
 
 	"parkpulse/backend/internal/analyzer"
 	"parkpulse/backend/internal/collector"
+	"parkpulse/backend/internal/logbuf"
 	"parkpulse/backend/internal/ws"
 )
 
@@ -39,7 +40,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("docker client: %v", err)
 	}
+	buf := logbuf.New(30) // arvoh konteksti: oxirgi 30 qator
+	col.Buf = buf
 	anl := analyzer.New()
+	anl.ContextFn = buf.Snapshot
 	hub := ws.NewHub()
 
 	col.Run(ctx)

@@ -12,7 +12,13 @@ export type Pass = {
   latency_ms: number;
   breakdown?: Breakdown;
 };
-export type Ghost = { plate?: string; gate: string; relay_at: string; raw: string };
+export type Ghost = {
+  plate?: string;
+  gate: string;
+  relay_at: string;
+  raw: string;
+  context?: string[]; // aniqlangan paytdagi atrofdagi log qatorlari
+};
 
 const LIMIT = 50;
 

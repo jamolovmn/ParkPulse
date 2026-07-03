@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 
+	"parkpulse/backend/internal/logbuf"
 	"parkpulse/backend/internal/parser"
 )
 
@@ -20,6 +21,7 @@ type Collector struct {
 	cli    *client.Client
 	names  []string // kuzatiladigan konteyner nomlari
 	Events chan *parser.Event
+	Buf    *logbuf.Buffer // barcha xom qatorlar (arvoh konteksti uchun)
 }
 
 func New(names []string) (*Collector, error) {
@@ -84,7 +86,11 @@ func (c *Collector) tail(ctx context.Context, name string) error {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
-		if ev := parser.Parse(name, scanner.Text()); ev != nil {
+		line := scanner.Text()
+		if c.Buf != nil {
+			c.Buf.Add(name, parser.Clean(line))
+		}
+		if ev := parser.Parse(name, line); ev != nil {
 			c.Events <- ev
 		}
 	}

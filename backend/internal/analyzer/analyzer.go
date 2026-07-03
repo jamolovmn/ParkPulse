@@ -46,6 +46,8 @@ type GhostEvent struct {
 	Gate    string    `json:"gate"`
 	RelayAt time.Time `json:"relay_at"`
 	Raw     string    `json:"raw"`
+	// Aniqlangan paytdagi atrofdagi log qatorlari — "nega ochildi?"ga dalil
+	Context []string `json:"context,omitempty"`
 }
 
 type Stats struct {
@@ -71,10 +73,14 @@ type session struct {
 type pendingRelay struct {
 	ev         *parser.Event
 	receivedAt time.Time
+	context    []string // hodisa paytidagi log atrofi
 }
 
 type Analyzer struct {
 	Out chan Message
+
+	// ContextFn arvoh paytidagi atrofdagi loglarni beradi (main'da ulanadi).
+	ContextFn func(container string) []string
 
 	window time.Duration
 	grace  time.Duration
@@ -151,9 +157,18 @@ func (a *Analyzer) handle(ev *parser.Event) {
 		if s := a.takeSession(ev); s != nil {
 			a.emitPass(s, ev)
 		} else {
-			a.pending = append(a.pending, pendingRelay{ev: ev, receivedAt: time.Now()})
+			a.pending = append(a.pending, pendingRelay{
+				ev: ev, receivedAt: time.Now(), context: a.contextFor(ev.Container),
+			})
 		}
 	}
+}
+
+func (a *Analyzer) contextFor(container string) []string {
+	if a.ContextFn == nil {
+		return nil
+	}
+	return a.ContextFn(container)
 }
 
 func outcomeKey(relay *parser.Event) string {
@@ -220,7 +235,8 @@ func (a *Analyzer) expire(now time.Time) {
 			a.stats.GhostCount++
 			a.lastOutcome[outcomeKey(p.ev)] = now
 			a.Out <- Message{Type: "ghost", Data: GhostEvent{
-				Plate: p.ev.Plate, Gate: p.ev.Gate, RelayAt: p.ev.Timestamp, Raw: p.ev.Raw,
+				Plate: p.ev.Plate, Gate: p.ev.Gate, RelayAt: p.ev.Timestamp,
+				Raw: p.ev.Raw, Context: p.context,
 			}}
 			a.emitStats()
 		} else {

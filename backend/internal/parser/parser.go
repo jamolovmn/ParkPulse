@@ -54,6 +54,17 @@ var (
 
 const appTSLayout = "20060102 15:04:05.000000 MST"
 
+// Clean Docker "--timestamps" prefiksini olib tashlaydi (kontekst ko'rinishi uchun).
+func Clean(line string) string {
+	line = strings.TrimRight(line, "\r\n")
+	if m := reDockerTS.FindStringSubmatch(line); m != nil {
+		if _, err := time.Parse(time.RFC3339Nano, m[1]); err == nil {
+			return strings.TrimPrefix(line, m[0])
+		}
+	}
+	return line
+}
+
 // Parse bitta log qatorini tekshiradi. ANPR/Relay bo'lmasa nil qaytaradi.
 // Vaqt ustuvorligi: dastur o'z vaqti (eng aniq) -> Docker vaqti -> hozirgi vaqt.
 func Parse(container, line string) *Event {
