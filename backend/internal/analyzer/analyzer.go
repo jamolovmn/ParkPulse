@@ -1,9 +1,9 @@
 // Package analyzer hodisalar zanjirini sessiyalarga yig'adi:
 //
-//	ANPR (1) -> GATEWAY (2) -> PERMIT/DB (3) -> RELAY/POS (4)
+//		ANPR (1) -> GATEWAY (2) -> PERMIT/DB (3) -> RELAY/POS (4)
 //
-//   - zanjir yakunlansa      -> PassEvent (total latency + breakdown)
-//   - RELAY juftsiz qolsa    -> GhostEvent ("arvoh ochilish")
+//	  - zanjir yakunlansa      -> PassEvent (total latency + breakdown)
+//	  - RELAY juftsiz qolsa    -> GhostEvent ("arvoh ochilish")
 //
 // Juftlashtirish birinchi navbatda mashina raqami (plate) bo'yicha; raqamsiz
 // hodisalar oynadagi eng so'nggi ochiq sessiyaga bog'lanadi.

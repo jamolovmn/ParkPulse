@@ -1,7 +1,7 @@
 'use client';
 
 import { Fragment, useState } from 'react';
-import { useParkPulse, Breakdown, Pass, Ghost, Stats } from '@/lib/useParkPulse';
+import { useParkPulse, Breakdown, Device, Pass, Ghost, Stats } from '@/lib/useParkPulse';
 
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleTimeString('uz-UZ', { hour12: false });
@@ -10,7 +10,7 @@ const fmtTime = (iso: string) =>
 const fmtMs = (ms: number) => `${ms < 10 ? ms.toFixed(1) : String(Math.round(ms))} ms`;
 
 export default function Dashboard() {
-  const { connected, stats, passes, ghosts } = useParkPulse();
+  const { connected, stats, passes, ghosts, devices } = useParkPulse();
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-8">
@@ -18,7 +18,10 @@ export default function Dashboard() {
       <KpiRow stats={stats} />
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <LiveFeed passes={passes} />
-        <GhostList ghosts={ghosts} />
+        <div className="space-y-6 self-start">
+          <GhostList ghosts={ghosts} />
+          <DevicePanel devices={devices} />
+        </div>
       </div>
     </main>
   );
@@ -26,18 +29,123 @@ export default function Dashboard() {
 
 function Header({ connected }: { connected: boolean }) {
   return (
-    <header className="mb-8 flex items-center justify-between">
+    <header className="mb-8 flex flex-wrap items-center justify-between gap-3">
       <div>
         <h1 className="text-xl font-semibold tracking-tight">ParkPulse</h1>
         <p className="mt-0.5 text-sm text-ink-muted">Smart Parking Monitoring</p>
       </div>
-      <div className="flex items-center gap-2 rounded-full border border-line px-3 py-1.5 text-xs text-ink-secondary">
-        <span
-          className={`h-2 w-2 rounded-full ${connected ? 'bg-good' : 'bg-critical'}`}
-        />
-        {connected ? 'Jonli' : 'Uzilgan'}
+      <div className="flex items-center gap-3">
+        <SpeedTest />
+        <div className="flex items-center gap-2 rounded-full border border-line px-3 py-1.5 text-xs text-ink-secondary">
+          <span
+            className={`h-2 w-2 rounded-full ${connected ? 'bg-good' : 'bg-critical'}`}
+          />
+          {connected ? 'Jonli' : 'Uzilgan'}
+        </div>
       </div>
     </header>
+  );
+}
+
+type SpeedResult = { ping_ms: number; download_mbps: number; upload_mbps: number };
+
+function SpeedTest() {
+  const [running, setRunning] = useState(false);
+  const [res, setRes] = useState<SpeedResult | null>(null);
+  const [err, setErr] = useState(false);
+
+  const run = async () => {
+    setRunning(true);
+    setErr(false);
+    try {
+      const r = await fetch('/api/speedtest');
+      if (!r.ok) throw new Error();
+      setRes(await r.json());
+    } catch {
+      setErr(true);
+      setRes(null);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-3">
+      {res && !running && (
+        <span className="text-xs text-ink-secondary [font-variant-numeric:tabular-nums]">
+          ↓ {res.download_mbps.toFixed(1)} Mbps · ↑ {res.upload_mbps.toFixed(1)} Mbps ·{' '}
+          {Math.round(res.ping_ms)} ms
+        </span>
+      )}
+      {err && !running && <span className="text-xs text-critical">Test xato</span>}
+      <button
+        onClick={run}
+        disabled={running}
+        className="rounded-md border border-line px-3 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-white/[0.05] disabled:opacity-50"
+      >
+        {running ? 'O‘lchanmoqda…' : 'Internet tezligi'}
+      </button>
+    </div>
+  );
+}
+
+function DevicePanel({ devices }: { devices: Device[] }) {
+  const [scanning, setScanning] = useState(false);
+  const [scanErr, setScanErr] = useState<string | null>(null);
+
+  const scan = async () => {
+    setScanning(true);
+    setScanErr(null);
+    try {
+      const r = await fetch('/api/scan', { method: 'POST' });
+      if (!r.ok) setScanErr(await r.text());
+    } catch {
+      setScanErr('So‘rov yuborilmadi');
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  return (
+    <section className="rounded-lg border border-line bg-surface">
+      <div className="flex items-center justify-between border-b border-line px-5 py-2.5">
+        <h2 className="text-sm font-medium">Tarmoq qurilmalari</h2>
+        <button
+          onClick={scan}
+          disabled={scanning}
+          className="rounded-md border border-line px-2.5 py-1 text-xs text-ink-secondary transition-colors hover:bg-white/[0.05] disabled:opacity-50"
+        >
+          {scanning ? 'Qidirilmoqda…' : 'Qidirish'}
+        </button>
+      </div>
+      {scanErr && (
+        <p className="border-b border-grid px-5 py-2 text-xs text-warn">{scanErr}</p>
+      )}
+      {devices.length === 0 ? (
+        <Empty text="Qurilma yo'q — «Qidirish»ni bosing yoki DEVICES env bering" />
+      ) : (
+        <ul className="divide-y divide-grid">
+          {devices.map((d) => (
+            <li key={d.ip} className="flex items-center gap-2.5 px-5 py-2.5 text-sm">
+              <span
+                className={`h-2 w-2 shrink-0 rounded-full ${d.alive ? 'bg-good' : 'bg-critical'}`}
+              />
+              <span className="truncate font-medium">{d.name}</span>
+              {d.name !== d.ip && (
+                <span className="truncate text-xs text-ink-muted">{d.ip}</span>
+              )}
+              <span
+                className={`ml-auto shrink-0 text-xs [font-variant-numeric:tabular-nums] ${
+                  d.alive ? 'text-ink-secondary' : 'text-critical'
+                }`}
+              >
+                {d.alive ? fmtMs(d.rtt_ms) : 'uzilgan'}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -157,8 +265,7 @@ function Chain({ breakdown: b }: { breakdown: Breakdown }) {
 function GhostList({ ghosts }: { ghosts: Ghost[] }) {
   const [open, setOpen] = useState<string | null>(null);
   return (
-    // self-start: bo'sh panel jonli oqim bilan teng cho'zilib ketmasin
-    <section className="self-start rounded-lg border border-line bg-surface">
+    <section className="rounded-lg border border-line bg-surface">
       <h2 className="border-b border-line px-5 py-3.5 text-sm font-medium">
         Arvoh ochilishlar
       </h2>

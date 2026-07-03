@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"parkpulse/backend/internal/analyzer"
+	"parkpulse/backend/internal/netmon"
 )
 
 const (
@@ -30,9 +31,10 @@ var upgrader = websocket.Upgrader{
 }
 
 type snapshot struct {
-	Stats  analyzer.Stats        `json:"stats"`
-	Passes []analyzer.PassEvent  `json:"passes"`
-	Ghosts []analyzer.GhostEvent `json:"ghosts"`
+	Stats   analyzer.Stats        `json:"stats"`
+	Passes  []analyzer.PassEvent  `json:"passes"`
+	Ghosts  []analyzer.GhostEvent `json:"ghosts"`
+	Devices []netmon.Device       `json:"devices"`
 }
 
 type Hub struct {
@@ -73,6 +75,8 @@ func (h *Hub) remember(msg analyzer.Message) {
 		h.state.Passes = appendCapped(h.state.Passes, d)
 	case analyzer.GhostEvent:
 		h.state.Ghosts = appendCapped(h.state.Ghosts, d)
+	case []netmon.Device:
+		h.state.Devices = d
 	}
 }
 

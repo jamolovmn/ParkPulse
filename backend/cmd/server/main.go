@@ -2,17 +2,21 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"parkpulse/backend/internal/analyzer"
 	"parkpulse/backend/internal/collector"
 	"parkpulse/backend/internal/logbuf"
+	"parkpulse/backend/internal/netmon"
+	"parkpulse/backend/internal/speedtest"
 	"parkpulse/backend/internal/ws"
 )
 
@@ -44,17 +48,60 @@ func main() {
 	col.Buf = buf
 	anl := analyzer.New()
 	anl.ContextFn = buf.Snapshot
+	mon := netmon.New()
 	hub := ws.NewHub()
 
 	col.Run(ctx)
 	go anl.Run(ctx, col.Events)
-	go hub.Run(ctx, anl.Out)
+	go mon.Run(ctx)
+
+	// Analyzer va netmon xabarlarini bitta oqimga yig'ib hub'ga beramiz
+	msgs := make(chan analyzer.Message, 512)
+	go pipe(ctx, anl.Out, msgs)
+	go pipe(ctx, mon.Out, msgs)
+	go hub.Run(ctx, msgs)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.HandleWS)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	// Internet tezligi testi — bir vaqtda faqat bitta test yuradi
+	var stMu sync.Mutex
+	mux.HandleFunc("/api/speedtest", func(w http.ResponseWriter, r *http.Request) {
+		if !stMu.TryLock() {
+			http.Error(w, "test allaqachon ketyapti", http.StatusTooManyRequests)
+			return
+		}
+		defer stMu.Unlock()
+		res, err := speedtest.Run(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(res)
+	})
+
+	// Subnet skaner — tarmoqdagi qurilmalarni topadi
+	mux.HandleFunc("/api/scan", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST kerak", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Subnet string `json:"subnet"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		devs, err := mon.Scan(r.Context(), body.Subnet)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"found": len(devs), "devices": devs})
+	})
+
 	// All-in-One: shu binary Next.js static build'ini ham serve qiladi.
 	mux.Handle("/", staticHandler(staticDir()))
 
@@ -67,6 +114,17 @@ func main() {
 	log.Printf("ParkPulse ishga tushdi. Konteynerlar: %v, UI+WS: http://localhost%s", names, addr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
+	}
+}
+
+func pipe(ctx context.Context, in <-chan analyzer.Message, out chan<- analyzer.Message) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case m := <-in:
+			out <- m
+		}
 	}
 }
 

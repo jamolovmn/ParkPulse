@@ -20,6 +20,14 @@ export type Ghost = {
   context?: string[]; // aniqlangan paytdagi atrofdagi log qatorlari
 };
 
+export type Device = {
+  name: string;
+  ip: string;
+  alive: boolean;
+  rtt_ms: number;
+  last_seen?: string;
+};
+
 const LIMIT = 50;
 
 export function useParkPulse() {
@@ -27,6 +35,7 @@ export function useParkPulse() {
   const [stats, setStats] = useState<Stats>({ total_passes: 0, avg_latency_ms: 0, ghost_count: 0 });
   const [passes, setPasses] = useState<Pass[]>([]); // eng yangisi birinchi
   const [ghosts, setGhosts] = useState<Ghost[]>([]);
+  const [devices, setDevices] = useState<Device[]>([]);
   const timer = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
@@ -45,6 +54,10 @@ export function useParkPulse() {
             setStats(msg.data.stats);
             setPasses([...(msg.data.passes ?? [])].reverse());
             setGhosts([...(msg.data.ghosts ?? [])].reverse());
+            setDevices(msg.data.devices ?? []);
+            break;
+          case 'devices':
+            setDevices(msg.data ?? []);
             break;
           case 'stats':
             setStats(msg.data);
@@ -71,5 +84,5 @@ export function useParkPulse() {
     };
   }, []);
 
-  return { connected, stats, passes, ghosts };
+  return { connected, stats, passes, ghosts, devices };
 }
