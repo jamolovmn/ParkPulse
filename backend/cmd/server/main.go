@@ -8,9 +8,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"sync"
 	"syscall"
+	"time"
 
 	"parkpulse/backend/internal/analyzer"
 	"parkpulse/backend/internal/collector"
@@ -59,6 +60,7 @@ func main() {
 	msgs := make(chan analyzer.Message, 512)
 	go pipe(ctx, anl.Out, msgs)
 	go pipe(ctx, mon.Out, msgs)
+	go runSpeedtest(ctx, msgs) // internet tezligini davriy o'lchaydi
 	go hub.Run(ctx, msgs)
 
 	mux := http.NewServeMux()
@@ -66,23 +68,6 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	// Internet tezligi testi — bir vaqtda faqat bitta test yuradi
-	var stMu sync.Mutex
-	mux.HandleFunc("/api/speedtest", func(w http.ResponseWriter, r *http.Request) {
-		if !stMu.TryLock() {
-			http.Error(w, "test allaqachon ketyapti", http.StatusTooManyRequests)
-			return
-		}
-		defer stMu.Unlock()
-		res, err := speedtest.Run(r.Context())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(res)
-	})
-
 	// Subnet skaner — tarmoqdagi qurilmalarni topadi
 	mux.HandleFunc("/api/scan", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -124,6 +109,41 @@ func pipe(ctx context.Context, in <-chan analyzer.Message, out chan<- analyzer.M
 			return
 		case m := <-in:
 			out <- m
+		}
+	}
+}
+
+// runSpeedtest internet tezligini davriy o'lchaydi va WS orqali yuboradi.
+// Nechta brauzer ochiq bo'lsa ham server bitta test qiladi — natija umumiy.
+// SPEEDTEST_MIN=0 bilan o'chiriladi; standart 15 daqiqa.
+func runSpeedtest(ctx context.Context, out chan<- analyzer.Message) {
+	mins := 15
+	if v, err := strconv.Atoi(os.Getenv("SPEEDTEST_MIN")); err == nil {
+		mins = v
+	}
+	if mins <= 0 {
+		return
+	}
+	run := func() {
+		res, err := speedtest.Run(ctx)
+		if err != nil {
+			log.Printf("[speedtest] %v", err)
+			return
+		}
+		select {
+		case out <- analyzer.Message{Type: "speedtest", Data: res}:
+		case <-ctx.Done():
+		}
+	}
+	run() // ishga tushganda darhol bir marta
+	t := time.NewTicker(time.Duration(mins) * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
 		}
 	}
 }

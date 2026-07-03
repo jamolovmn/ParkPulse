@@ -1,7 +1,7 @@
 'use client';
 
 import { Fragment, useState } from 'react';
-import { useParkPulse, Breakdown, Device, Pass, Ghost, Stats } from '@/lib/useParkPulse';
+import { useParkPulse, Breakdown, Device, Pass, Ghost, Speed, Stats } from '@/lib/useParkPulse';
 
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleTimeString('uz-UZ', { hour12: false });
@@ -10,11 +10,11 @@ const fmtTime = (iso: string) =>
 const fmtMs = (ms: number) => `${ms < 10 ? ms.toFixed(1) : String(Math.round(ms))} ms`;
 
 export default function Dashboard() {
-  const { connected, stats, passes, ghosts, devices } = useParkPulse();
+  const { connected, stats, passes, ghosts, devices, speed } = useParkPulse();
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-8">
-      <Header connected={connected} />
+      <Header connected={connected} speed={speed} />
       <KpiRow stats={stats} />
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <LiveFeed passes={passes} />
@@ -27,65 +27,31 @@ export default function Dashboard() {
   );
 }
 
-function Header({ connected }: { connected: boolean }) {
+function Header({ connected, speed }: { connected: boolean; speed: Speed | null }) {
   return (
     <header className="mb-8 flex flex-wrap items-center justify-between gap-3">
       <div>
         <h1 className="text-xl font-semibold tracking-tight">ParkPulse</h1>
         <p className="mt-0.5 text-sm text-ink-muted">Smart Parking Monitoring</p>
       </div>
-      <div className="flex items-center gap-3">
-        <SpeedTest />
-        <div className="flex items-center gap-2 rounded-full border border-line px-3 py-1.5 text-xs text-ink-secondary">
+      <div className="flex items-center gap-4">
+        {speed && (
           <span
-            className={`h-2 w-2 rounded-full ${connected ? 'bg-good' : 'bg-critical'}`}
-          />
-          {connected ? 'Jonli' : 'Uzilgan'}
-        </div>
+            className="text-xs text-ink-secondary [font-variant-numeric:tabular-nums]"
+            title="Server internet tezligi (avtomatik o‘lchanadi)"
+          >
+            ↓ {speed.download_mbps.toFixed(0)} · ↑ {speed.upload_mbps.toFixed(0)} Mbps ·{' '}
+            {Math.round(speed.ping_ms)} ms
+          </span>
+        )}
+        {/* Faqat holat nuqtasi — matnsiz */}
+        <span
+          className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-good' : 'bg-critical'}`}
+          title={connected ? 'Ulangan' : 'Uzilgan'}
+          aria-label={connected ? 'Ulangan' : 'Uzilgan'}
+        />
       </div>
     </header>
-  );
-}
-
-type SpeedResult = { ping_ms: number; download_mbps: number; upload_mbps: number };
-
-function SpeedTest() {
-  const [running, setRunning] = useState(false);
-  const [res, setRes] = useState<SpeedResult | null>(null);
-  const [err, setErr] = useState(false);
-
-  const run = async () => {
-    setRunning(true);
-    setErr(false);
-    try {
-      const r = await fetch('/api/speedtest');
-      if (!r.ok) throw new Error();
-      setRes(await r.json());
-    } catch {
-      setErr(true);
-      setRes(null);
-    } finally {
-      setRunning(false);
-    }
-  };
-
-  return (
-    <div className="flex items-center gap-3">
-      {res && !running && (
-        <span className="text-xs text-ink-secondary [font-variant-numeric:tabular-nums]">
-          ↓ {res.download_mbps.toFixed(1)} Mbps · ↑ {res.upload_mbps.toFixed(1)} Mbps ·{' '}
-          {Math.round(res.ping_ms)} ms
-        </span>
-      )}
-      {err && !running && <span className="text-xs text-critical">Test xato</span>}
-      <button
-        onClick={run}
-        disabled={running}
-        className="rounded-md border border-line px-3 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-white/[0.05] disabled:opacity-50"
-      >
-        {running ? 'O‘lchanmoqda…' : 'Internet tezligi'}
-      </button>
-    </div>
   );
 }
 

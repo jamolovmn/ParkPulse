@@ -13,6 +13,7 @@ import (
 
 	"parkpulse/backend/internal/analyzer"
 	"parkpulse/backend/internal/netmon"
+	"parkpulse/backend/internal/speedtest"
 )
 
 const (
@@ -35,6 +36,7 @@ type snapshot struct {
 	Passes  []analyzer.PassEvent  `json:"passes"`
 	Ghosts  []analyzer.GhostEvent `json:"ghosts"`
 	Devices []netmon.Device       `json:"devices"`
+	Speed   *speedtest.Result     `json:"speed,omitempty"`
 }
 
 type Hub struct {
@@ -77,6 +79,8 @@ func (h *Hub) remember(msg analyzer.Message) {
 		h.state.Ghosts = appendCapped(h.state.Ghosts, d)
 	case []netmon.Device:
 		h.state.Devices = d
+	case *speedtest.Result:
+		h.state.Speed = d
 	}
 }
 

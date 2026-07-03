@@ -31,6 +31,8 @@ export type Device = {
   ports?: number[];
 };
 
+export type Speed = { ping_ms: number; download_mbps: number; upload_mbps: number };
+
 const LIMIT = 50;
 
 export function useParkPulse() {
@@ -39,6 +41,7 @@ export function useParkPulse() {
   const [passes, setPasses] = useState<Pass[]>([]); // eng yangisi birinchi
   const [ghosts, setGhosts] = useState<Ghost[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [speed, setSpeed] = useState<Speed | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
@@ -58,9 +61,13 @@ export function useParkPulse() {
             setPasses([...(msg.data.passes ?? [])].reverse());
             setGhosts([...(msg.data.ghosts ?? [])].reverse());
             setDevices(msg.data.devices ?? []);
+            setSpeed(msg.data.speed ?? null);
             break;
           case 'devices':
             setDevices(msg.data ?? []);
+            break;
+          case 'speedtest':
+            setSpeed(msg.data ?? null);
             break;
           case 'stats':
             setStats(msg.data);
@@ -87,5 +94,5 @@ export function useParkPulse() {
     };
   }, []);
 
-  return { connected, stats, passes, ghosts, devices };
+  return { connected, stats, passes, ghosts, devices, speed };
 }
