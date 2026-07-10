@@ -1,0 +1,14 @@
+# ParkPulse'ni yig'ib turuvchi Prometheus konfiguratsiyasi.
+#
+# MUHIM: "targets" da localhost EMAS, ParkPulse ishlab turgan hostning
+# haqiqiy IP manzilini yozing. Prometheus konteyner ichida ishlaganda
+# "localhost" o'zini bildiradi, ParkPulse'ni emas.
+#   - bir xost, Docker: host.docker.internal:8888 (Mac/Windows) yoki LAN IP
+#   - alohida server:  192.168.1.50:8888
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: parkpulse
+    static_configs:
+      - targets: ["host.docker.internal:8888"]
