@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"parkpulse/backend/internal/analyzer"
+	"parkpulse/backend/internal/collector"
 	"parkpulse/backend/internal/netmon"
 	"parkpulse/backend/internal/speedtest"
 )
@@ -32,11 +33,13 @@ var upgrader = websocket.Upgrader{
 }
 
 type snapshot struct {
-	Stats   analyzer.Stats        `json:"stats"`
-	Passes  []analyzer.PassEvent  `json:"passes"`
-	Ghosts  []analyzer.GhostEvent `json:"ghosts"`
-	Devices []netmon.Device       `json:"devices"`
-	Speed   *speedtest.Result     `json:"speed,omitempty"`
+	Stats   analyzer.Stats          `json:"stats"`
+	Passes  []analyzer.PassEvent    `json:"passes"`
+	Opens   []analyzer.OpenEvent    `json:"opens"`
+	Traffic []analyzer.TrafficPoint `json:"traffic"`
+	Devices []netmon.Device         `json:"devices"`
+	Speed   *speedtest.Result       `json:"speed,omitempty"`
+	Health  *collector.Health       `json:"health"`
 }
 
 type Hub struct {
@@ -46,7 +49,11 @@ type Hub struct {
 }
 
 func NewHub() *Hub {
-	return &Hub{clients: make(map[chan analyzer.Message]struct{})}
+	return &Hub{
+		clients: make(map[chan analyzer.Message]struct{}),
+		// Birinchi snapshot'da ham JSON shakli to'liq bo'lsin (null emas).
+		state: snapshot{Stats: analyzer.Stats{Opens: map[string]int{}}},
+	}
 }
 
 // Run analyzer'dan kelgan xabarlarni tarixga yozadi va klientlarga tarqatadi.
@@ -75,12 +82,16 @@ func (h *Hub) remember(msg analyzer.Message) {
 		h.state.Stats = d
 	case analyzer.PassEvent:
 		h.state.Passes = appendCapped(h.state.Passes, d)
-	case analyzer.GhostEvent:
-		h.state.Ghosts = appendCapped(h.state.Ghosts, d)
+	case analyzer.OpenEvent:
+		h.state.Opens = appendCapped(h.state.Opens, d)
+	case []analyzer.TrafficPoint:
+		h.state.Traffic = d
 	case []netmon.Device:
 		h.state.Devices = d
 	case *speedtest.Result:
 		h.state.Speed = d
+	case collector.Health:
+		h.state.Health = &d
 	}
 }
 

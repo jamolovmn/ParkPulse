@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 # ParkPulse — image build va GHCR'ga push.
-# Ishlatish:
-#   ./build.sh          -> build qiladi va push qiladi
-#   ./build.sh --local  -> faqat build (push qilmaydi, test uchun)
 set -euo pipefail
 
 IMAGE="ghcr.io/jamolovmn/parking-pulse:latest"
@@ -19,4 +16,3 @@ fi
 echo "==> GHCR'ga push..."
 docker push "$IMAGE"
 echo "==> Tayyor: $IMAGE"
-echo "    ioEdge'da konteynerni re-pull qiling."

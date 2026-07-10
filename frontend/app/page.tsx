@@ -1,299 +1,212 @@
 'use client';
 
-import { Fragment, useState } from 'react';
-import { useParkPulse, Breakdown, Device, Pass, Ghost, Speed, Stats } from '@/lib/useParkPulse';
+import { useState } from 'react';
+import { useParkPulse, Speed, Stats } from '@/lib/useParkPulse';
+import TrafficChart from '@/components/TrafficChart';
+import LiveFeed from '@/components/LiveFeed';
+import OpenList from '@/components/OpenList';
+import Devices from '@/components/Devices';
+import { HealthPanel, ContainerTable } from '@/components/Health';
 
-const fmtTime = (iso: string) =>
-  new Date(iso).toLocaleTimeString('uz-UZ', { hour12: false });
-
-// Zanjir qadamlari juda tez (0.1-15ms) — kichik qiymatlarda kasr ko'rsatamiz
 const fmtMs = (ms: number) => `${ms < 10 ? ms.toFixed(1) : String(Math.round(ms))} ms`;
 
+type Section = 'dashboard' | 'devices' | 'system';
+type Panel = 'passes' | 'opens';
+
+const NAV: { id: Section; label: string; icon: string }[] = [
+  { id: 'dashboard', label: 'Boshqaruv', icon: '◈' },
+  { id: 'devices', label: 'Qurilmalar', icon: '⌸' },
+  { id: 'system', label: 'Tizim', icon: '⚙' },
+];
+
 export default function Dashboard() {
-  const { connected, stats, passes, ghosts, devices, speed } = useParkPulse();
+  const { connected, stats, passes, opens, traffic, devices, speed, health } = useParkPulse();
+  const [section, setSection] = useState<Section>('dashboard');
+  const [panel, setPanel] = useState<Panel>('passes');
+
+  const offline = devices.filter((d) => !d.alive).length;
 
   return (
-    <main className="mx-auto max-w-6xl px-6 py-8">
-      <Header connected={connected} speed={speed} />
-      <KpiRow stats={stats} />
-      <div className="mt-6 grid gap-6 lg:grid-cols-3">
-        <LiveFeed passes={passes} />
-        <div className="space-y-6 self-start">
-          <GhostList ghosts={ghosts} />
-          <DevicePanel devices={devices} />
+    <div className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:flex-row lg:gap-8 lg:py-8">
+      <Sidebar section={section} onSelect={setSection} connected={connected} offline={offline} />
+
+      <main className="min-w-0 flex-1 space-y-6">
+        <Header connected={connected} speed={speed} />
+
+        {section === 'dashboard' && (
+          <>
+            <KpiRow stats={stats} panel={panel} onPanel={setPanel} />
+            <TrafficChart points={traffic} />
+            {panel === 'passes' ? <LiveFeed passes={passes} /> : <OpenList opens={opens} />}
+          </>
+        )}
+
+        {section === 'devices' && <Devices devices={devices} />}
+
+        {section === 'system' && (
+          <div className="space-y-6">
+            <HealthPanel health={health} />
+            <ContainerTable health={health} />
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function Sidebar({
+  section,
+  onSelect,
+  connected,
+  offline,
+}: {
+  section: Section;
+  onSelect: (s: Section) => void;
+  connected: boolean;
+  offline: number;
+}) {
+  return (
+    <aside className="lg:w-52 lg:shrink-0">
+      <div className="mb-6 hidden items-center gap-2.5 lg:flex">
+        <span className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-good' : 'bg-critical'}`} />
+        <div>
+          <p className="text-sm font-semibold tracking-tight">ParkPulse</p>
+          <p className="text-[11px] text-ink-muted">Smart Parking</p>
         </div>
       </div>
-    </main>
+
+      <nav className="flex gap-1 overflow-x-auto lg:flex-col">
+        {NAV.map((n) => {
+          const active = section === n.id;
+          return (
+            <button
+              key={n.id}
+              onClick={() => onSelect(n.id)}
+              className={`flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
+                active
+                  ? 'bg-white/[0.07] font-medium text-ink'
+                  : 'text-ink-muted hover:bg-white/[0.03] hover:text-ink-secondary'
+              }`}
+            >
+              <span aria-hidden className="text-base leading-none">
+                {n.icon}
+              </span>
+              {n.label}
+              {n.id === 'devices' && offline > 0 && (
+                <span className="ml-auto rounded-full bg-critical/15 px-1.5 text-[10px] font-medium text-critical">
+                  {offline}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+    </aside>
   );
 }
 
 function Header({ connected, speed }: { connected: boolean; speed: Speed | null }) {
   return (
-    <header className="mb-8 flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">ParkPulse</h1>
-        <p className="mt-0.5 text-sm text-ink-muted">Smart Parking Monitoring</p>
+    <header className="flex flex-wrap items-center justify-between gap-3">
+      <div className="lg:hidden">
+        <h1 className="text-lg font-semibold tracking-tight">ParkPulse</h1>
       </div>
-      <div className="flex items-center gap-4">
+      <div className="ml-auto flex items-center gap-4">
         {speed && (
           <span
             className="text-xs text-ink-secondary [font-variant-numeric:tabular-nums]"
-            title="Server internet tezligi (avtomatik o‘lchanadi)"
+            title="Server internet tezligi"
           >
             ↓ {speed.download_mbps.toFixed(0)} · ↑ {speed.upload_mbps.toFixed(0)} Mbps ·{' '}
             {Math.round(speed.ping_ms)} ms
           </span>
         )}
-        {/* Faqat holat nuqtasi — matnsiz */}
         <span
-          className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-good' : 'bg-critical'}`}
+          className={`h-2.5 w-2.5 rounded-full lg:hidden ${connected ? 'bg-good' : 'bg-critical'}`}
           title={connected ? 'Ulangan' : 'Uzilgan'}
-          aria-label={connected ? 'Ulangan' : 'Uzilgan'}
         />
       </div>
     </header>
   );
 }
 
-function DevicePanel({ devices }: { devices: Device[] }) {
-  const [scanning, setScanning] = useState(false);
-  const [scanErr, setScanErr] = useState<string | null>(null);
-
-  const scan = async () => {
-    setScanning(true);
-    setScanErr(null);
-    try {
-      const r = await fetch('/api/scan', { method: 'POST' });
-      if (!r.ok) setScanErr(await r.text());
-    } catch {
-      setScanErr('So‘rov yuborilmadi');
-    } finally {
-      setScanning(false);
-    }
-  };
+function KpiRow({
+  stats,
+  panel,
+  onPanel,
+}: {
+  stats: Stats;
+  panel: Panel;
+  onPanel: (p: Panel) => void;
+}) {
+  const opens = stats.opens ?? {};
+  const clean = (opens.paid ?? 0) + (opens.remote ?? 0) + (opens.entry ?? 0);
 
   return (
-    <section className="rounded-lg border border-line bg-surface">
-      <div className="flex items-center justify-between border-b border-line px-5 py-2.5">
-        <h2 className="text-sm font-medium">Tarmoq qurilmalari</h2>
-        <button
-          onClick={scan}
-          disabled={scanning}
-          className="rounded-md border border-line px-2.5 py-1 text-xs text-ink-secondary transition-colors hover:bg-white/[0.05] disabled:opacity-50"
-        >
-          {scanning ? 'Qidirilmoqda…' : 'Qidirish'}
-        </button>
-      </div>
-      {scanErr && (
-        <p className="border-b border-grid px-5 py-2 text-xs text-warn">{scanErr}</p>
-      )}
-      {devices.length === 0 ? (
-        <Empty text="Qurilma yo'q — «Qidirish»ni bosing yoki DEVICES env bering" />
-      ) : (
-        <ul className="divide-y divide-grid">
-          {devices.map((d) => (
-            <li key={d.ip} className="flex items-center gap-2.5 px-5 py-2.5 text-sm">
-              <span
-                className={`h-2 w-2 shrink-0 rounded-full ${d.alive ? 'bg-good' : 'bg-critical'}`}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="truncate font-medium">{d.name}</span>
-                  {d.type && (
-                    <span className="shrink-0 rounded border border-line px-1.5 py-0.5 text-[10px] text-ink-muted">
-                      {d.type}
-                      {d.vendor ? ` · ${d.vendor}` : ''}
-                    </span>
-                  )}
-                </div>
-                {d.name !== d.ip && (
-                  <span className="text-xs text-ink-muted">{d.ip}</span>
-                )}
-              </div>
-              <span
-                className={`shrink-0 text-xs [font-variant-numeric:tabular-nums] ${
-                  d.alive ? 'text-ink-secondary' : 'text-critical'
-                }`}
-              >
-                {d.alive ? fmtMs(d.rtt_ms) : 'uzilgan'}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-function KpiRow({ stats }: { stats: Stats }) {
-  return (
-    <div className="grid gap-4 sm:grid-cols-3">
-      <Kpi label="Jami kirishlar" value={String(stats.total_passes)} />
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       <Kpi
         label="O'rtacha latency"
         value={stats.total_passes ? fmtMs(stats.avg_latency_ms) : '—'}
+        note={`${stats.total_passes} ta o'tish`}
+        active={panel === 'passes'}
+        onClick={() => onPanel('passes')}
       />
       <Kpi
         label="Arvoh ochilishlar"
         value={String(stats.ghost_count)}
+        note="Qarzdor + mashinasiz"
         alert={stats.ghost_count > 0}
+        active={panel === 'opens'}
+        onClick={() => onPanel('opens')}
+      />
+      <Kpi label="Muammosiz ochilish" value={String(clean)} note="To'landi + pult" />
+      <Kpi
+        label="Qoidabuzarlik"
+        value={String(opens.violation ?? 0)}
+        note={`Mashinasiz: ${opens.ghost ?? 0}`}
+        alert={(opens.violation ?? 0) > 0}
       />
     </div>
   );
 }
 
-function Kpi({ label, value, alert }: { label: string; value: string; alert?: boolean }) {
+function Kpi({
+  label,
+  value,
+  note,
+  alert,
+  active,
+  onClick,
+}: {
+  label: string;
+  value: string;
+  note?: string;
+  alert?: boolean;
+  active?: boolean;
+  onClick?: () => void;
+}) {
+  const clickable = !!onClick;
   return (
-    <div className="rounded-lg border border-line bg-surface p-5">
+    <div
+      onClick={onClick}
+      role={clickable ? 'button' : undefined}
+      className={`rounded-xl border p-4 transition-colors ${
+        clickable ? 'cursor-pointer' : ''
+      } ${
+        active
+          ? 'border-ink/25 bg-surface'
+          : `border-line bg-surface/50 ${clickable ? 'hover:border-ink/20 hover:bg-surface' : ''}`
+      }`}
+    >
       <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">{label}</p>
-      <p className={`mt-2 text-3xl font-semibold ${alert ? 'text-critical' : 'text-ink'}`}>
+      <p
+        className={`mt-1.5 text-2xl font-semibold [font-variant-numeric:tabular-nums] ${
+          alert ? 'text-critical' : 'text-ink'
+        }`}
+      >
         {value}
       </p>
+      {note && <p className="mt-0.5 text-[11px] text-ink-muted">{note}</p>}
     </div>
   );
-}
-
-function LiveFeed({ passes }: { passes: Pass[] }) {
-  const [open, setOpen] = useState<string | null>(null);
-  return (
-    <section className="rounded-lg border border-line bg-surface lg:col-span-2">
-      <h2 className="border-b border-line px-5 py-3.5 text-sm font-medium">
-        Jonli oqim
-      </h2>
-      {passes.length === 0 ? (
-        <Empty text="Hodisalar kutilmoqda…" />
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm [font-variant-numeric:tabular-nums]">
-            <thead>
-              <tr className="text-left text-xs uppercase tracking-wide text-ink-muted">
-                <th className="px-5 py-2.5 font-medium">Vaqt</th>
-                <th className="px-5 py-2.5 font-medium">Raqam</th>
-                <th className="px-5 py-2.5 font-medium">Darvoza</th>
-                <th className="px-5 py-2.5 text-right font-medium">Latency</th>
-              </tr>
-            </thead>
-            <tbody>
-              {passes.map((p, i) => {
-                const key = `${p.relay_at}-${p.plate}-${i}`;
-                const expanded = open === key;
-                return (
-                  <Fragment key={key}>
-                    <tr
-                      onClick={() => p.breakdown && setOpen(expanded ? null : key)}
-                      className={`border-t border-grid ${
-                        p.breakdown ? 'cursor-pointer hover:bg-white/[0.03]' : ''
-                      }`}
-                    >
-                      <td className="px-5 py-2.5 text-ink-secondary">{fmtTime(p.relay_at)}</td>
-                      <td className="px-5 py-2.5 font-medium">{p.plate}</td>
-                      <td className="px-5 py-2.5 text-ink-secondary">{p.gate || '—'}</td>
-                      <td
-                        className={`px-5 py-2.5 text-right ${
-                          p.latency_ms > 1500 ? 'text-warn' : 'text-ink-secondary'
-                        }`}
-                      >
-                        {fmtMs(p.latency_ms)}
-                      </td>
-                    </tr>
-                    {expanded && p.breakdown && (
-                      <tr className="bg-white/[0.02]">
-                        <td colSpan={4} className="px-5 pb-3 pt-1">
-                          <Chain breakdown={p.breakdown} />
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
-
-// Zanjir qadamlari: ANPR —ms→ Gateway —ms→ DB —ms→ Relay
-function Chain({ breakdown: b }: { breakdown: Breakdown }) {
-  const nodes = ['ANPR', 'Gateway', 'DB', 'Relay'];
-  const times = [b.gateway_ms, b.db_ms, b.pos_ms];
-  return (
-    <div className="flex flex-wrap items-center gap-1.5 text-xs [font-variant-numeric:tabular-nums]">
-      {nodes.map((n, i) => (
-        <Fragment key={n}>
-          <span className="rounded-md border border-line px-2 py-0.5 font-medium text-ink-secondary">
-            {n}
-          </span>
-          {i < times.length && (
-            <span className="flex items-center gap-1 text-ink-muted">
-              <span aria-hidden>—</span>
-              <span>{fmtMs(times[i])}</span>
-              <span aria-hidden>→</span>
-            </span>
-          )}
-        </Fragment>
-      ))}
-    </div>
-  );
-}
-
-function GhostList({ ghosts }: { ghosts: Ghost[] }) {
-  const [open, setOpen] = useState<string | null>(null);
-  return (
-    <section className="rounded-lg border border-line bg-surface">
-      <h2 className="border-b border-line px-5 py-3.5 text-sm font-medium">
-        Arvoh ochilishlar
-      </h2>
-      {ghosts.length === 0 ? (
-        <Empty text="Arvoh ochilish yo'q" />
-      ) : (
-        <ul className="divide-y divide-grid">
-          {ghosts.map((g, i) => {
-            const key = `${g.relay_at}-${i}`;
-            const expanded = open === key;
-            const hasContext = (g.context?.length ?? 0) > 0;
-            return (
-              <li
-                key={key}
-                onClick={() => hasContext && setOpen(expanded ? null : key)}
-                className={`px-5 py-3 ${hasContext ? 'cursor-pointer hover:bg-white/[0.03]' : ''}`}
-              >
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-critical" aria-hidden>
-                    ▲
-                  </span>
-                  <span className="font-medium text-critical">ANPR'siz ochilish</span>
-                  <span className="ml-auto text-xs text-ink-muted [font-variant-numeric:tabular-nums]">
-                    {fmtTime(g.relay_at)}
-                  </span>
-                </div>
-                <p className="mt-1 text-xs text-ink-secondary">
-                  Darvoza: {g.gate || 'noma’lum'}
-                  {g.plate ? ` · Raqam: ${g.plate}` : ''}
-                </p>
-                <p className="mt-1 truncate font-mono text-xs text-ink-muted" title={g.raw}>
-                  {g.raw}
-                </p>
-                {hasContext && (
-                  <p className="mt-1.5 text-xs text-ink-muted">
-                    {expanded ? '▾ Kontekst (o‘sha paytdagi loglar)' : '▸ Kontekstni ko‘rish'}
-                  </p>
-                )}
-                {expanded && hasContext && (
-                  <pre className="mt-2 max-h-48 overflow-auto rounded-md border border-grid bg-page p-3 text-[11px] leading-relaxed text-ink-muted">
-                    {g.context!.join('\n')}
-                  </pre>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-function Empty({ text }: { text: string }) {
-  return <p className="px-5 py-10 text-center text-sm text-ink-muted">{text}</p>;
 }

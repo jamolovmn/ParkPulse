@@ -5,23 +5,38 @@ package collector
 import (
 	"bufio"
 	"context"
-	"io"
-	"log"
-	"time"
-
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	"io"
+	"log"
+	"time"
 
 	"parkpulse/backend/internal/logbuf"
 	"parkpulse/backend/internal/parser"
 )
 
+type ContainerStat struct {
+	Name   string  `json:"name"`
+	CPU    float64 `json:"cpu_percent"`
+	RAM    float64 `json:"ram_percent"`
+	RAM_MB float64 `json:"ram_mb"`
+}
+
+type Health struct {
+	UptimeSec  float64         `json:"uptime_sec"`
+	Cores      []float64       `json:"cores"`
+	Containers []ContainerStat `json:"containers"`
+	TotalRAM   float64         `json:"total_ram_mb"`
+	UsedRAM    float64         `json:"used_ram_mb"`
+}
+
 type Collector struct {
-	cli    *client.Client
-	names  []string // kuzatiladigan konteyner nomlari
-	Events chan *parser.Event
-	Buf    *logbuf.Buffer // barcha xom qatorlar (arvoh konteksti uchun)
+	cli       *client.Client
+	names     []string
+	Events    chan *parser.Event
+	Buf       *logbuf.Buffer
+	HealthOut chan Health
 }
 
 func New(names []string) (*Collector, error) {
@@ -29,7 +44,12 @@ func New(names []string) (*Collector, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Collector{cli: cli, names: names, Events: make(chan *parser.Event, 256)}, nil
+	return &Collector{
+		cli:       cli,
+		names:     names,
+		Events:    make(chan *parser.Event, 256),
+		HealthOut: make(chan Health, 16),
+	}, nil
 }
 
 // Run har bir konteyner uchun alohida goroutine'da tail boshlaydi.
@@ -37,6 +57,7 @@ func (c *Collector) Run(ctx context.Context) {
 	for _, name := range c.names {
 		go c.tailLoop(ctx, name)
 	}
+	go c.systemHealthLoop(ctx)
 }
 
 // tailLoop stream uzilsa (konteyner restart va h.k.) 3 soniyadan keyin qayta ulanadi.

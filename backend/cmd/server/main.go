@@ -15,6 +15,7 @@ import (
 
 	"parkpulse/backend/internal/analyzer"
 	"parkpulse/backend/internal/collector"
+	"parkpulse/backend/internal/config"
 	"parkpulse/backend/internal/logbuf"
 	"parkpulse/backend/internal/netmon"
 	"parkpulse/backend/internal/speedtest"
@@ -22,6 +23,13 @@ import (
 )
 
 func main() {
+	// Ixtiyoriy YAML konfig env'ni to'ldiradi (aniq env har doim ustun).
+	if path, err := config.Load(); err != nil {
+		log.Fatalf("konfig: %v", err)
+	} else if path != "" {
+		log.Printf("konfig o'qildi: %s", path)
+	}
+
 	// Har obyektda konteyner nomi har xil (p24gui, parking24-gateway-api, ...).
 	// Shuning uchun nom faqat env orqali keladi: TARGET_CONTAINER="p24gui"
 	// Bir nechta bo'lsa vergul bilan: TARGET_CONTAINER="p24gui,p24-relay"
@@ -60,6 +68,19 @@ func main() {
 	msgs := make(chan analyzer.Message, 512)
 	go pipe(ctx, anl.Out, msgs)
 	go pipe(ctx, mon.Out, msgs)
+
+	// Sog'liq monitoridan kelgan xabarlarni ham hub'ga yuboramiz
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case h := <-col.HealthOut:
+				msgs <- analyzer.Message{Type: "health", Data: h}
+			}
+		}
+	}()
+
 	go runSpeedtest(ctx, msgs) // internet tezligini davriy o'lchaydi
 	go hub.Run(ctx, msgs)
 
@@ -67,6 +88,11 @@ func main() {
 	mux.HandleFunc("/ws", hub.HandleWS)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
+	})
+	// Prometheus eksporti — Grafana/Prometheus'ga ulash uchun.
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		hub.WriteMetrics(w)
 	})
 	// Subnet skaner — tarmoqdagi qurilmalarni topadi
 	mux.HandleFunc("/api/scan", func(w http.ResponseWriter, r *http.Request) {

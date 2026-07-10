@@ -32,7 +32,15 @@ const (
 	pingTimeout  = 2 * time.Second
 	maxScanHosts = 1024
 	scanParallel = 128
+	histLen      = 30 // sifat oynasi: 30 × 10s ≈ 5 daqiqa
+	sparkLen     = 20 // frontend sparkline uchun so'nggi nuqtalar
 )
+
+// sample — bitta ping natijasi (sifat statistikasi uchun tarixda saqlanadi).
+type sample struct {
+	alive bool
+	rtt   float64
+}
 
 type Device struct {
 	Name     string    `json:"name"`
@@ -43,7 +51,18 @@ type Device struct {
 	Type     string    `json:"type,omitempty"`      // avto aniqlangan: Kamera/Web/Noma'lum
 	Vendor   string    `json:"vendor,omitempty"`    // HTTP izidan (Hikvision, Dahua...)
 	Ports    []int     `json:"ports,omitempty"`     // ochiq portlar
-	probed   bool      // fingerprint bir marta bajarildi
+
+	// Sifat ko'rsatkichlari (so'nggi ~5 daqiqa oynasidan hisoblanadi):
+	MinMs     float64   `json:"min_ms,omitempty"`
+	AvgMs     float64   `json:"avg_ms,omitempty"`
+	MaxMs     float64   `json:"max_ms,omitempty"`
+	JitterMs  float64   `json:"jitter_ms"`         // ketma-ket RTT farqining o'rtachasi
+	LossPct   float64   `json:"loss_pct"`          // javobsiz pinglar ulushi
+	UptimePct float64   `json:"uptime_pct"`        // javob bergan pinglar ulushi
+	Samples   []float64 `json:"samples,omitempty"` // sparkline: RTT, -1 = javobsiz
+
+	probed bool     // fingerprint bir marta bajarildi
+	hist   []sample // sifat oynasi (marshal qilinmaydi)
 }
 
 type Monitor struct {
@@ -114,6 +133,7 @@ func (m *Monitor) tick(ctx context.Context) {
 					d.LastSeen = time.Now()
 					needFP = !d.probed
 				}
+				record(d, alive, rtt)
 			}
 			m.mu.Unlock()
 			// Tur avtomatik aniqlanadi — tirik va hali skanerlanmagan bo'lsa
@@ -130,6 +150,76 @@ func (m *Monitor) tick(ctx context.Context) {
 	wg.Wait()
 	m.emit()
 }
+
+// record pingdan kelgan natijani qurilma tarixiga qo'shib, sifat
+// ko'rsatkichlarini (jitter, yo'qotish, uptime, min/avg/max) qayta hisoblaydi.
+// Chaqiruvchi m.mu ni ushlab turishi shart.
+func record(d *Device, alive bool, rtt float64) {
+	d.hist = append(d.hist, sample{alive: alive, rtt: rtt})
+	if len(d.hist) > histLen {
+		d.hist = d.hist[len(d.hist)-histLen:]
+	}
+
+	var (
+		miss, n           int
+		sum, jitSum       float64
+		jitN              int
+		min, max, prevRtt float64
+		havePrev          bool
+	)
+	spark := make([]float64, 0, sparkLen)
+	for _, s := range d.hist {
+		if !s.alive {
+			miss++
+			spark = append(spark, -1)
+			havePrev = false // uzilishdan keyingi sakrash jitterga kirmasin
+			continue
+		}
+		n++
+		sum += s.rtt
+		if n == 1 || s.rtt < min {
+			min = s.rtt
+		}
+		if s.rtt > max {
+			max = s.rtt
+		}
+		if havePrev {
+			jitSum += absf(s.rtt - prevRtt)
+			jitN++
+		}
+		prevRtt, havePrev = s.rtt, true
+		spark = append(spark, s.rtt)
+	}
+
+	total := len(d.hist)
+	d.LossPct = round1(float64(miss) / float64(total) * 100)
+	d.UptimePct = round1(float64(n) / float64(total) * 100)
+	if n > 0 {
+		d.MinMs = round1(min)
+		d.MaxMs = round1(max)
+		d.AvgMs = round1(sum / float64(n))
+	} else {
+		d.MinMs, d.MaxMs, d.AvgMs = 0, 0, 0
+	}
+	if jitN > 0 {
+		d.JitterMs = round1(jitSum / float64(jitN))
+	} else {
+		d.JitterMs = 0
+	}
+	if len(spark) > sparkLen {
+		spark = spark[len(spark)-sparkLen:]
+	}
+	d.Samples = spark
+}
+
+func absf(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+func round1(x float64) float64 { return float64(int(x*10+0.5)) / 10 }
 
 // Fingerprint uchun tekshiriladigan portlar (qurilma turini bildiradi).
 var probePorts = []int{80, 443, 554, 8000, 37777, 34567}
@@ -340,6 +430,7 @@ func (m *Monitor) Scan(ctx context.Context, subnet string) ([]Device, error) {
 				d := m.devices[ip]
 				d.Alive, d.RttMs, d.LastSeen = true, rtt, time.Now()
 				d.Type, d.Vendor, d.Ports, d.probed = typ, vendor, ports, true
+				record(d, true, rtt)
 				m.mu.Unlock()
 			}
 		}(ip)

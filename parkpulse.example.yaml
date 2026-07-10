@@ -1,0 +1,51 @@
+# ParkPulse konfiguratsiyasi (namuna).
+#
+# Ishlatish: shu faylni parkpulse.yaml deb nusxalang yoki
+#   CONFIG_FILE=/etc/parkpulse/config.yaml
+# env orqali yo'lini ko'rsating. Konteynerda /etc/parkpulse/config.yaml
+# ham avtomatik o'qiladi.
+#
+# MUHIM: aniq berilgan env HAR DOIM ushbu fayldan ustun turadi. Ya'ni
+# `docker run -e LISTEN_ADDR=:9000 ...` bu yerdagi qiymatni bekor qiladi.
+
+# Kuzatiladigan Docker konteyner nomlari (loglari o'qiladi).
+target_containers:
+  - p24gui
+  # - parking24-gateway-api
+
+# Web + WebSocket manzili.
+listen_addr: ":8888"
+
+# Next.js statik build papkasi (odatda image ichida /app/static).
+# static_dir: /app/static
+
+# Internet tezligini necha daqiqada o'lchash (0 = o'chirilgan).
+speedtest_min: 15
+
+# Avtomatik skanerlanadigan subnetlar (host network rejimida ishlaydi).
+scan_subnet:
+  - 192.168.1.0/24
+
+# Doimiy kuzatiladigan qurilmalar (ping + sifat: jitter/yo'qotish/uptime).
+devices:
+  - name: Kirish kamera
+    ip: 192.168.1.64
+  - name: Chiqish kamera
+    ip: 192.168.1.65
+  - name: Relay moduli
+    ip: 192.168.1.70
+
+# Analizator vaqt oynalari (soniyada). Standart qiymatlar ko'pchilikka mos.
+analyzer:
+  match_window_sec: 180 # ANPR -> to'lov zanjiri oynasi
+  grace_sec: 3          # kech kelgan ANPR'ni kutish
+  autopay_sec: 90       # ochilishdan keyin avto-to'lovni kutish (pult farqi)
+  presence_sec: 60      # ANPR shuncha vaqt "mashina datchikda" hisoblanadi
+  dedupe_sec: 60        # bitta raqamning takroriy qatorlari
+  gate_dedupe_sec: 10   # raqamsiz (apparat) qatorlar oynasi
+
+# Log formati har obyektda har xil — kerak bo'lsa ochilish/pult qatorini
+# moslashtiring (Go regexp). Ochilish regexida 1-guruh darvoza bo'lsa
+# ishlatiladi, bo'lmasa matndan "enter/exit N" topiladi.
+# relay_open_re: '(?i)\bRelay\s+((?:enter|exit)\s+\d+):\s*-\s*RelayWorker'
+# relay_remote_re: '(?i)\bOpened\s+by\s+operator\b'
