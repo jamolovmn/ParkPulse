@@ -64,6 +64,10 @@ the single most common source of false ghost alerts.
   that block ICMP (TCP fallback).
 - **Server & container health** — CPU per core, RAM, uptime, and `docker stats`
   per container.
+- **SNMP switch/router monitoring** — poll interface status (up/down) and
+  live throughput (in/out Mbps) from managed switches and routers.
+- **Alerting** — Telegram and/or webhook notifications on device down, ghost
+  opening, or SNMP port down. Works without Grafana; fires only on state change.
 - **Internet speedtest** — periodic download/upload/ping via Cloudflare.
 - **Prometheus `/metrics`** — plug straight into Grafana.
 - **YAML config** — declarative, git-friendly alternative to env vars.
@@ -113,9 +117,65 @@ point `CONFIG_FILE` at it.
 | `PRESENCE_SEC` | `60` | How long an ANPR read counts as "car on the sensor". |
 | `RELAY_OPEN_RE` | built-in | Regex for the physical barrier-open log line. |
 | `RELAY_REMOTE_RE` | built-in | Regex for the guard's remote-open signal. |
+| `SNMP_TARGETS` | — | SNMP devices: `name=ip@community`, comma-separated. Add `#1` for SNMP v1. |
+| `SNMP_INTERVAL_SEC` | `30` | SNMP poll interval. |
+| `ALERT_TELEGRAM_TOKEN` | — | Telegram bot token (from @BotFather). |
+| `ALERT_TELEGRAM_CHAT` | — | Telegram chat/channel id to send alerts to. |
+| `ALERT_WEBHOOK_URL` | — | Optional URL to POST a JSON alert payload to. |
 
 The two regexes let you adapt ParkPulse to a controller whose log wording
 differs, without rebuilding.
+
+## Alerting
+
+ParkPulse can push a notification the moment something goes wrong — no Grafana
+required. Alerts fire **only on a state change** (a device going down, then a
+separate alert when it recovers), so a flapping link doesn't spam you.
+
+Triggers:
+
+- **Device down / recovered** — a **watched** device stops (or resumes)
+  responding. Only devices you star (★) in the **Qurilmalar (Devices)** tab
+  alert, so transient hosts like phones and laptops that come and go on the LAN
+  never page you. Devices listed in `DEVICES` are watched by default; auto-scanned
+  ones are not. You can also **rename any device** (✎) so it's unmistakable
+  (e.g. relabel an "unknown device" as "Relay"). Both are saved (`DEVICES_STORE`,
+  default `devices.json`).
+- **Ghost / violation opening** — a suspicious barrier opening (the same events
+  that increment the ghost counter).
+- **SNMP port down / up** — a switch interface changes state.
+
+**Configure it from the dashboard** — no rebuild needed. Open **Tizim
+(System) → Ogohlantirish**, paste your Telegram bot token + chat id (and/or a
+webhook URL), **Save**, then **Send test** to confirm it works. Settings are
+written to a JSON file (`ALERT_STORE`, default `alerts.json`) and survive a
+restart; mount it on a volume to survive a re-pull.
+
+- **Telegram** — create a bot with [@BotFather](https://t.me/BotFather) to get
+  the token; the chat id is your channel/group id (or personal chat id).
+- **Webhook** — ParkPulse POSTs a JSON body `{level, title, text, time}` to the
+  URL (route it to Slack, a script, anything).
+
+Prefer config-as-code? The same values can be set via env
+(`ALERT_TELEGRAM_TOKEN`, `ALERT_TELEGRAM_CHAT`, `ALERT_WEBHOOK_URL`) or the
+`alerts:` block in YAML. A value saved from the UI takes precedence over env on
+the next restart.
+
+## SNMP (switch / router monitoring)
+
+Point ParkPulse at managed switches or routers and it polls each interface for
+**operational status** (up/down) and **live throughput** (in/out Mbps, derived
+from the interface octet counters). A **Network** tab appears in the dashboard,
+and the data is also exported to Prometheus.
+
+```bash
+-e SNMP_TARGETS="Core=192.168.1.1@public,Edge=192.168.1.2@public"
+```
+
+Format is `name=ip@community`, comma-separated. Append `#1` for SNMP v1
+(`...@public#1`); the default is v2c. Throughput needs two polls to appear, so
+the first interval shows only status. Requires SNMP to be enabled on the device
+(read-only community is enough).
 
 ## Grafana / Prometheus
 
@@ -188,6 +248,8 @@ Prometheus data source, and type a metric name into the query box. Examples:
 | Devices online | `parkpulse_device_up` |
 | Camera latency / jitter | `parkpulse_device_rtt_ms` · `parkpulse_device_jitter_ms` |
 | Packet loss | `parkpulse_device_loss_ratio` |
+| Switch port up | `parkpulse_snmp_if_up` |
+| Switch throughput | `parkpulse_snmp_if_in_mbps` · `parkpulse_snmp_if_out_mbps` |
 
 **6. Alerting (optional).** In Grafana **Alerting → Alert rules**, create a rule
 like `parkpulse_ghost_openings_total > 0` or `parkpulse_device_up == 0 for 2m`
@@ -208,6 +270,8 @@ parkpulse_avg_latency_ms 842.3
 parkpulse_ghost_openings_total 3
 parkpulse_opens_total{kind="violation"} 2
 parkpulse_cpu_percent{core="0"} 23.4
+parkpulse_snmp_if_up{host="Core switch",if="Gi0/1"} 1
+parkpulse_snmp_if_in_mbps{host="Core switch",if="Gi0/1"} 143.2
 parkpulse_speedtest_download_mbps 92.4
 ```
 
@@ -215,10 +279,10 @@ parkpulse_speedtest_download_mbps 92.4
 
 ```
 Docker logs ─► collector ─► parser ─► analyzer ─┐
-                                                ├─► WebSocket hub ─► dashboard (Next.js)
 LAN devices ─► netmon (ping + quality) ─────────┤
-server stats ─► collector.health ───────────────┤
-                                                └─► /metrics (Prometheus)
+switches ────► snmp (interface poll) ───────────├─► WebSocket hub ─► dashboard (Next.js)
+server stats ─► collector.health ───────────────┤                └─► /metrics (Prometheus)
+                                                └─► alert (Telegram / webhook)
 ```
 
 - **parser** — regex-matches log lines into typed events (ANPR, Gateway,
@@ -227,6 +291,9 @@ server stats ─► collector.health ──────────────�
   classifies each opening into one of the states above.
 - **netmon** — pings monitored devices, scans subnets, fingerprints device type
   and vendor, and derives ping-quality stats over a rolling window.
+- **snmp** — polls managed switches/routers for interface status and throughput.
+- **alert** — watches the event stream and pushes Telegram/webhook alerts on
+  state changes (device down, ghost opening, port down).
 - **ws** — fans out snapshots and live events to browsers; also renders
   `/metrics`.
 

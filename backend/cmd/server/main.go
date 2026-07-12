@@ -13,11 +13,13 @@ import (
 	"syscall"
 	"time"
 
+	"parkpulse/backend/internal/alert"
 	"parkpulse/backend/internal/analyzer"
 	"parkpulse/backend/internal/collector"
 	"parkpulse/backend/internal/config"
 	"parkpulse/backend/internal/logbuf"
 	"parkpulse/backend/internal/netmon"
+	"parkpulse/backend/internal/snmp"
 	"parkpulse/backend/internal/speedtest"
 	"parkpulse/backend/internal/ws"
 )
@@ -81,8 +83,36 @@ func main() {
 		}
 	}()
 
+	// SNMP poller (switch/router interfeyslari) — SNMP_TARGETS berilgan bo'lsa.
+	if pol := snmp.New(); pol != nil {
+		go pol.Run(ctx)
+		go pipe(ctx, pol.Out, msgs)
+		log.Printf("SNMP kuzatuvi: %d ta qurilma", pol.Targets())
+	}
+
 	go runSpeedtest(ctx, msgs) // internet tezligini davriy o'lchaydi
-	go hub.Run(ctx, msgs)
+
+	// Ogohlantirish har doim ishlaydi (UI orqali runtime'da yoqilishi mumkin).
+	// Barcha xabarlar hub'ga borishdan oldin alerter'dan o'tadi.
+	al := alert.New()
+	al.LoadStore() // UI orqali kiritilgan sozlama (agar bo'lsa)
+	go al.Run(ctx)
+	hubIn := make(chan analyzer.Message, 512)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case m := <-msgs:
+				al.Observe(m)
+				hubIn <- m
+			}
+		}
+	}()
+	go hub.Run(ctx, hubIn)
+	if al.Enabled() {
+		log.Printf("ogohlantirish yoqilgan: %v", al.Sinks())
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.HandleWS)
@@ -94,6 +124,84 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		hub.WriteMetrics(w)
 	})
+	// Ogohlantirish sozlamalari — UI'dan Telegram token/chat va webhook kiritiladi.
+	mux.HandleFunc("/api/alerts", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"config":  al.Config(),
+				"enabled": al.Enabled(),
+				"sinks":   al.Sinks(),
+			})
+		case http.MethodPost:
+			var s alert.Settings
+			if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
+				http.Error(w, "yaroqsiz JSON", http.StatusBadRequest)
+				return
+			}
+			if err := al.SetConfig(s); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"enabled": al.Enabled(), "sinks": al.Sinks()})
+		default:
+			http.Error(w, "GET yoki POST kerak", http.StatusMethodNotAllowed)
+		}
+	})
+	// Sinov xabari — sozlama to'g'riligini tekshirish uchun.
+	mux.HandleFunc("/api/alerts/test", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST kerak", http.StatusMethodNotAllowed)
+			return
+		}
+		tctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		w.Header().Set("Content-Type", "application/json")
+		if err := al.Test(tctx); err != nil {
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	})
+
+	// Qurilma kuzatuvini yoqish/o'chirish — faqat kuzatiladiganlar alert beradi.
+	mux.HandleFunc("/api/devices/watch", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST kerak", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			IP      string `json:"ip"`
+			Watched bool   `json:"watched"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.IP == "" {
+			http.Error(w, "ip kerak", http.StatusBadRequest)
+			return
+		}
+		mon.SetWatch(body.IP, body.Watched)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// Qurilmaga qo'lda nom berish (bo'sh nom — avtomatik nomga qaytaradi).
+	mux.HandleFunc("/api/devices/name", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST kerak", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			IP   string `json:"ip"`
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.IP == "" {
+			http.Error(w, "ip kerak", http.StatusBadRequest)
+			return
+		}
+		mon.SetName(body.IP, body.Name)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	// Subnet skaner — tarmoqdagi qurilmalarni topadi
 	mux.HandleFunc("/api/scan", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

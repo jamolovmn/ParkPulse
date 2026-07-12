@@ -66,7 +66,7 @@ func reasonOf(k OpenKind) string {
 	case KindRemote:
 		return "Pult bilan ochildi — chiqishda avto to'lov olindi"
 	case KindEntry:
-		return "Mashina kirdi — kirishda to'lov olinmaydi"
+		return "" // kirish — qo'shimcha izoh shart emas, "Kirish" yorlig'i yetarli
 	case KindViolation:
 		return "Mashina datchikda, qarzi bor — to'lovsiz va pultsiz ochildi"
 	default:

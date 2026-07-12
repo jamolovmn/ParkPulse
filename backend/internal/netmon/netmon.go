@@ -7,9 +7,11 @@ package netmon
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -52,6 +54,11 @@ type Device struct {
 	Vendor   string    `json:"vendor,omitempty"`    // HTTP izidan (Hikvision, Dahua...)
 	Ports    []int     `json:"ports,omitempty"`     // ochiq portlar
 
+	// Watched — bu qurilma uzilsa Telegram/webhook xabar bersinmi. Faqat
+	// kuzatiladigan (kamera/relay/POS) qurilmalar alert beradi; skanerda topilgan
+	// telefon/noutbuk uzilib-ulanaversa bezovta qilmasin.
+	Watched bool `json:"watched"`
+
 	// Sifat ko'rsatkichlari (so'nggi ~5 daqiqa oynasidan hisoblanadi):
 	MinMs     float64   `json:"min_ms,omitempty"`
 	AvgMs     float64   `json:"avg_ms,omitempty"`
@@ -62,20 +69,36 @@ type Device struct {
 	Samples   []float64 `json:"samples,omitempty"` // sparkline: RTT, -1 = javobsiz
 
 	probed bool     // fingerprint bir marta bajarildi
+	pinned bool     // DEVICES config'da qo'lda yozilgan — kuzatishning standarti true
 	hist   []sample // sifat oynasi (marshal qilinmaydi)
+}
+
+// override — UI orqali kiritilgan qurilma sozlamalari (nom, kuzatuv). IP bo'yicha
+// saqlanadi va restartda tiklanadi. Skaner qayta topsa ham bu qiymatlar ustun.
+type override struct {
+	Name    string `json:"name,omitempty"`
+	Watched *bool  `json:"watched,omitempty"` // nil = standartga tayan (d.pinned)
 }
 
 type Monitor struct {
 	Out chan analyzer.Message
 
 	mu      sync.Mutex
-	devices map[string]*Device // kalit: IP
+	devices map[string]*Device   // kalit: IP
+	over    map[string]*override // UI override'lari (nom + kuzatuv)
+	store   string               // override'lar saqlanadigan JSON fayl
 }
 
 func New() *Monitor {
+	store := strings.TrimSpace(os.Getenv("DEVICES_STORE"))
+	if store == "" {
+		store = "devices.json"
+	}
 	m := &Monitor{
 		Out:     make(chan analyzer.Message, 16),
 		devices: make(map[string]*Device),
+		over:    make(map[string]*override),
+		store:   store,
 	}
 	for _, pair := range strings.Split(os.Getenv("DEVICES"), ",") {
 		pair = strings.TrimSpace(pair)
@@ -86,9 +109,83 @@ func New() *Monitor {
 		if !ok {
 			name, ip = pair, pair
 		}
-		m.devices[strings.TrimSpace(ip)] = &Device{Name: strings.TrimSpace(name), IP: strings.TrimSpace(ip)}
+		ip = strings.TrimSpace(ip)
+		// Config'da qo'lda yozilgan — muhim qurilma, standart bo'yicha kuzatiladi.
+		m.devices[ip] = &Device{Name: strings.TrimSpace(name), IP: ip, pinned: true}
 	}
+	m.load()
 	return m
+}
+
+// watchedFor qurilma kuzatilishi kerakligini qaytaradi: aniq tanlov bo'lsa o'sha,
+// bo'lmasa standart (config qurilmalari — ha, skaner topganlari — yo'q).
+// Chaqiruvchi m.mu ni ushlashi shart.
+func (m *Monitor) watchedFor(d *Device) bool {
+	if o := m.over[d.IP]; o != nil && o.Watched != nil {
+		return *o.Watched
+	}
+	return d.pinned
+}
+
+// nameFor qurilma nomini qaytaradi: UI'da qo'lda berilgan nom bo'lsa o'sha,
+// bo'lmasa avtomatik/config nomi. Chaqiruvchi m.mu ni ushlashi shart.
+func (m *Monitor) nameFor(d *Device) string {
+	if o := m.over[d.IP]; o != nil && o.Name != "" {
+		return o.Name
+	}
+	return d.Name
+}
+
+// overFor IP uchun override yozuvini (kerak bo'lsa yaratib) qaytaradi.
+func (m *Monitor) overFor(ip string) *override {
+	o := m.over[ip]
+	if o == nil {
+		o = &override{}
+		m.over[ip] = o
+	}
+	return o
+}
+
+// SetWatch bitta qurilma uchun kuzatuvni yoqadi/o'chiradi va saqlaydi.
+func (m *Monitor) SetWatch(ip string, watched bool) {
+	m.mu.Lock()
+	m.overFor(strings.TrimSpace(ip)).Watched = &watched
+	m.save()
+	m.mu.Unlock()
+	m.emit()
+}
+
+// SetName qurilmaga qo'lda nom beradi (bo'sh nom — avtomatik nomga qaytaradi).
+func (m *Monitor) SetName(ip, name string) {
+	ip = strings.TrimSpace(ip)
+	name = strings.TrimSpace(name)
+	m.mu.Lock()
+	m.overFor(ip).Name = name
+	m.save()
+	m.mu.Unlock()
+	m.emit()
+}
+
+// load/save — override'larni diskda saqlaydi (restartda unutilmasin).
+// Chaqiruvchi m.mu ni ushlashi shart (save uchun).
+func (m *Monitor) load() {
+	b, err := os.ReadFile(m.store)
+	if err != nil {
+		return
+	}
+	var o map[string]*override
+	if err := json.Unmarshal(b, &o); err != nil {
+		log.Printf("[netmon] qurilma sozlama fayli buzuq (%s): %v", m.store, err)
+		return
+	}
+	m.over = o
+}
+
+func (m *Monitor) save() {
+	b, _ := json.MarshalIndent(m.over, "", "  ")
+	if err := os.WriteFile(m.store, b, 0o600); err != nil {
+		log.Printf("[netmon] qurilma sozlamasini saqlab bo'lmadi (%s): %v", m.store, err)
+	}
 }
 
 func (m *Monitor) Run(ctx context.Context) {
@@ -446,7 +543,10 @@ func (m *Monitor) Devices() []Device {
 	defer m.mu.Unlock()
 	out := make([]Device, 0, len(m.devices))
 	for _, d := range m.devices {
-		out = append(out, *d)
+		dev := *d
+		dev.Name = m.nameFor(d)
+		dev.Watched = m.watchedFor(d)
+		out = append(out, dev)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out

@@ -49,6 +49,7 @@ export type Device = {
   type?: string; // avto aniqlangan: Kamera / Web qurilma / Noma'lum
   vendor?: string; // Hikvision, Dahua...
   ports?: number[];
+  watched?: boolean; // uzilganda alert bersinmi (★)
   // Sifat ko'rsatkichlari (so'nggi ~5 daqiqa)
   min_ms?: number;
   avg_ms?: number;
@@ -60,6 +61,27 @@ export type Device = {
 };
 
 export type Speed = { ping_ms: number; download_mbps: number; upload_mbps: number };
+
+/** SNMP interfeysi (switch/router porti). */
+export type SnmpIface = {
+  index: number;
+  name: string;
+  up: boolean;
+  in_mbps: number;
+  out_mbps: number;
+  speed_mbps?: number;
+};
+
+/** SNMP qurilmasi. */
+export type SnmpHost = {
+  name: string;
+  ip: string;
+  up: boolean;
+  descr?: string;
+  uptime?: string;
+  ifaces: SnmpIface[];
+  err?: string;
+};
 
 export type ContainerStat = {
   name: string;
@@ -77,6 +99,10 @@ export type SystemHealth = {
 };
 
 const LIMIT = 50;
+// Shubhali ochilishlar kam, lekin muhim — ularni uzoqroq saqlaymiz, aks holda
+// KPI "1 ta arvoh" desa-yu, ro'yxat bo'sh chiqib qoladi (band darvozada 50 talik
+// umumiy oyna arvohni tezda siqib chiqaradi).
+const GHOST_LIMIT = 200;
 
 const emptyStats: Stats = { total_passes: 0, avg_latency_ms: 0, ghost_count: 0, opens: {} };
 
@@ -85,8 +111,10 @@ export function useParkPulse() {
   const [stats, setStats] = useState<Stats>(emptyStats);
   const [passes, setPasses] = useState<Pass[]>([]);
   const [opens, setOpens] = useState<Open[]>([]);
+  const [ghosts, setGhosts] = useState<Open[]>([]);
   const [traffic, setTraffic] = useState<TrafficPoint[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [snmp, setSnmp] = useState<SnmpHost[]>([]);
   const [speed, setSpeed] = useState<Speed | null>(null);
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>();
@@ -107,8 +135,10 @@ export function useParkPulse() {
             setStats({ ...emptyStats, ...msg.data.stats });
             setPasses([...(msg.data.passes ?? [])].reverse());
             setOpens([...(msg.data.opens ?? [])].reverse());
+            setGhosts([...(msg.data.ghosts ?? [])].reverse());
             setTraffic(msg.data.traffic ?? []);
             setDevices(msg.data.devices ?? []);
+            setSnmp(msg.data.snmp ?? []);
             setSpeed(msg.data.speed ?? null);
             setHealth(msg.data.health ?? null);
             break;
@@ -120,12 +150,17 @@ export function useParkPulse() {
             break;
           case 'open':
             setOpens((o) => [msg.data, ...o].slice(0, LIMIT));
+            if (isSuspicious(msg.data.kind))
+              setGhosts((g) => [msg.data, ...g].slice(0, GHOST_LIMIT));
             break;
           case 'traffic':
             setTraffic(msg.data ?? []);
             break;
           case 'devices':
             setDevices(msg.data ?? []);
+            break;
+          case 'snmp':
+            setSnmp(msg.data ?? []);
             break;
           case 'speedtest':
             setSpeed(msg.data ?? null);
@@ -149,5 +184,5 @@ export function useParkPulse() {
     };
   }, []);
 
-  return { connected, stats, passes, opens, traffic, devices, speed, health };
+  return { connected, stats, passes, opens, ghosts, traffic, devices, snmp, speed, health };
 }

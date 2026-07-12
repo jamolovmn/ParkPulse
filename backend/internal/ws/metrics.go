@@ -67,6 +67,23 @@ func (h *Hub) WriteMetrics(w io.Writer) {
 		}
 	}
 
+	// --- SNMP interfeyslari (switch/router) ---
+	if len(s.SNMP) > 0 {
+		help(w, "parkpulse_snmp_up", "gauge", "SNMP qurilmasi javob berayaptimi (1/0).")
+		help(w, "parkpulse_snmp_if_up", "gauge", "Interfeys holati (1=up).")
+		help(w, "parkpulse_snmp_if_in_mbps", "gauge", "Interfeys kirish trafigi, Mbit/s.")
+		help(w, "parkpulse_snmp_if_out_mbps", "gauge", "Interfeys chiqish trafigi, Mbit/s.")
+		for _, host := range s.SNMP {
+			metric(w, "parkpulse_snmp_up", labels{"host": host.Name, "ip": host.IP}, b2f(host.Up))
+			for _, i := range host.Ifaces {
+				lb := labels{"host": host.Name, "if": i.Name}
+				metric(w, "parkpulse_snmp_if_up", lb, b2f(i.Up))
+				metric(w, "parkpulse_snmp_if_in_mbps", lb, i.InMbps)
+				metric(w, "parkpulse_snmp_if_out_mbps", lb, i.OutMbps)
+			}
+		}
+	}
+
 	// --- Internet tezligi ---
 	if s.Speed != nil {
 		help(w, "parkpulse_speedtest_download_mbps", "gauge", "Yuklab olish tezligi, Mbit/s.")

@@ -49,3 +49,25 @@ analyzer:
 # ishlatiladi, bo'lmasa matndan "enter/exit N" topiladi.
 # relay_open_re: '(?i)\bRelay\s+((?:enter|exit)\s+\d+):\s*-\s*RelayWorker'
 # relay_remote_re: '(?i)\bOpened\s+by\s+operator\b'
+
+# Ogohlantirishlar — qurilma uzilsa, arvoh ochilish bo'lsa yoki SNMP porti
+# uzilsa Telegram va/yoki webhook'ga xabar. Grafana'siz ham ishlaydi.
+# Xabar faqat holat o'zgarganda chiqadi (spam bo'lmaydi).
+# alerts:
+#   telegram:
+#     token: "123456:ABC-DEF..."   # @BotFather bergan token
+#     chat_id: "-1001234567890"    # kanal/guruh yoki shaxsiy chat id
+#   webhook: "https://example.com/hook"  # ixtiyoriy JSON POST
+
+# SNMP kuzatuvi — switch/router interfeyslarining holati (up/down) va real
+# vaqtdagi trafigi (kirish/chiqish Mbps). Dashboard'da "Tarmoq" bo'limi paydo bo'ladi.
+# snmp:
+#   interval_sec: 30
+#   targets:
+#     - name: Core switch
+#       ip: 192.168.1.1
+#       community: public
+#       # version: "2c"   # yoki "1" (eski qurilmalar)
+#     - name: Edge router
+#       ip: 192.168.1.2
+#       community: public

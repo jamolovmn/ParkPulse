@@ -6,29 +6,43 @@ import TrafficChart from '@/components/TrafficChart';
 import LiveFeed from '@/components/LiveFeed';
 import OpenList from '@/components/OpenList';
 import Devices from '@/components/Devices';
+import SnmpPanel from '@/components/SnmpPanel';
+import AlertSettings from '@/components/AlertSettings';
 import { HealthPanel, ContainerTable } from '@/components/Health';
 
 const fmtMs = (ms: number) => `${ms < 10 ? ms.toFixed(1) : String(Math.round(ms))} ms`;
 
-type Section = 'dashboard' | 'devices' | 'system';
+type Section = 'dashboard' | 'devices' | 'network' | 'system';
 type Panel = 'passes' | 'opens';
 
-const NAV: { id: Section; label: string; icon: string }[] = [
+type NavItem = { id: Section; label: string; icon: string };
+
+const NAV: NavItem[] = [
   { id: 'dashboard', label: 'Boshqaruv', icon: '◈' },
   { id: 'devices', label: 'Qurilmalar', icon: '⌸' },
   { id: 'system', label: 'Tizim', icon: '⚙' },
 ];
 
 export default function Dashboard() {
-  const { connected, stats, passes, opens, traffic, devices, speed, health } = useParkPulse();
+  const { connected, stats, passes, opens, ghosts, traffic, devices, snmp, speed, health } =
+    useParkPulse();
   const [section, setSection] = useState<Section>('dashboard');
   const [panel, setPanel] = useState<Panel>('passes');
 
   const offline = devices.filter((d) => !d.alive).length;
 
+  // "Tarmoq" bo'limi faqat SNMP sozlangan bo'lsa ko'rinadi (bo'sh menyu bo'lmasin).
+  const nav = snmp.length > 0 ? [...NAV.slice(0, 2), { id: 'network' as const, label: 'Tarmoq', icon: '⇅' }, NAV[2]] : NAV;
+
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:flex-row lg:gap-8 lg:py-8">
-      <Sidebar section={section} onSelect={setSection} connected={connected} offline={offline} />
+      <Sidebar
+        nav={nav}
+        section={section}
+        onSelect={setSection}
+        connected={connected}
+        offline={offline}
+      />
 
       <main className="min-w-0 flex-1 space-y-6">
         <Header connected={connected} speed={speed} />
@@ -37,16 +51,25 @@ export default function Dashboard() {
           <>
             <KpiRow stats={stats} panel={panel} onPanel={setPanel} />
             <TrafficChart points={traffic} />
-            {panel === 'passes' ? <LiveFeed passes={passes} /> : <OpenList opens={opens} />}
+            {panel === 'passes' ? (
+              <LiveFeed passes={passes} />
+            ) : (
+              <OpenList opens={opens} ghosts={ghosts} />
+            )}
           </>
         )}
 
         {section === 'devices' && <Devices devices={devices} />}
 
+        {section === 'network' && <SnmpPanel hosts={snmp} />}
+
         {section === 'system' && (
           <div className="space-y-6">
-            <HealthPanel health={health} />
-            <ContainerTable health={health} />
+            <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
+              <HealthPanel health={health} />
+              <ContainerTable health={health} />
+            </div>
+            <AlertSettings />
           </div>
         )}
       </main>
@@ -55,11 +78,13 @@ export default function Dashboard() {
 }
 
 function Sidebar({
+  nav,
   section,
   onSelect,
   connected,
   offline,
 }: {
+  nav: NavItem[];
   section: Section;
   onSelect: (s: Section) => void;
   connected: boolean;
@@ -76,7 +101,7 @@ function Sidebar({
       </div>
 
       <nav className="flex gap-1 overflow-x-auto lg:flex-col">
-        {NAV.map((n) => {
+        {nav.map((n) => {
           const active = section === n.id;
           return (
             <button

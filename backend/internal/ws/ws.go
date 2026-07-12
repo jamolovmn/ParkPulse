@@ -14,11 +14,13 @@ import (
 	"parkpulse/backend/internal/analyzer"
 	"parkpulse/backend/internal/collector"
 	"parkpulse/backend/internal/netmon"
+	"parkpulse/backend/internal/snmp"
 	"parkpulse/backend/internal/speedtest"
 )
 
 const (
-	historyLimit = 50 // snapshot'da saqlanadigan so'nggi hodisalar soni
+	historyLimit = 50  // snapshot'da saqlanadigan so'nggi hodisalar soni
+	ghostLimit   = 200 // shubhali ochilishlar (arvoh + qoidabuzarlik) alohida, uzoq saqlanadi
 
 	// Oradagi proxy'lar (ioEdge va h.k.) jim turgan ulanishni ~60s da uzadi.
 	// Server har 30s da ping yuboradi — ulanish doim "tirik" qoladi.
@@ -33,11 +35,16 @@ var upgrader = websocket.Upgrader{
 }
 
 type snapshot struct {
-	Stats   analyzer.Stats          `json:"stats"`
-	Passes  []analyzer.PassEvent    `json:"passes"`
-	Opens   []analyzer.OpenEvent    `json:"opens"`
+	Stats  analyzer.Stats       `json:"stats"`
+	Passes []analyzer.PassEvent `json:"passes"`
+	Opens  []analyzer.OpenEvent `json:"opens"` // so'nggi ochilishlar (barcha turlar, 50 ta)
+	// Ghosts — faqat shubhali ochilishlar (arvoh + qoidabuzarlik). Alohida va
+	// uzoq saqlanadi: band darvozada oddiy ochilishlar 50 talik oynadan bittagina
+	// arvohni siqib chiqarib yubormasin — KPI hisoblagichi bilan mos qolsin.
+	Ghosts  []analyzer.OpenEvent    `json:"ghosts"`
 	Traffic []analyzer.TrafficPoint `json:"traffic"`
 	Devices []netmon.Device         `json:"devices"`
+	SNMP    []snmp.Host             `json:"snmp"`
 	Speed   *speedtest.Result       `json:"speed,omitempty"`
 	Health  *collector.Health       `json:"health"`
 }
@@ -81,13 +88,18 @@ func (h *Hub) remember(msg analyzer.Message) {
 	case analyzer.Stats:
 		h.state.Stats = d
 	case analyzer.PassEvent:
-		h.state.Passes = appendCapped(h.state.Passes, d)
+		h.state.Passes = appendCapped(h.state.Passes, d, historyLimit)
 	case analyzer.OpenEvent:
-		h.state.Opens = appendCapped(h.state.Opens, d)
+		h.state.Opens = appendCapped(h.state.Opens, d, historyLimit)
+		if d.Kind.Suspicious() {
+			h.state.Ghosts = appendCapped(h.state.Ghosts, d, ghostLimit)
+		}
 	case []analyzer.TrafficPoint:
 		h.state.Traffic = d
 	case []netmon.Device:
 		h.state.Devices = d
+	case []snmp.Host:
+		h.state.SNMP = d
 	case *speedtest.Result:
 		h.state.Speed = d
 	case collector.Health:
@@ -95,10 +107,10 @@ func (h *Hub) remember(msg analyzer.Message) {
 	}
 }
 
-func appendCapped[T any](s []T, v T) []T {
+func appendCapped[T any](s []T, v T, limit int) []T {
 	s = append(s, v)
-	if len(s) > historyLimit {
-		s = s[len(s)-historyLimit:]
+	if len(s) > limit {
+		s = s[len(s)-limit:]
 	}
 	return s
 }

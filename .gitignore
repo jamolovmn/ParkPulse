@@ -8,3 +8,7 @@ frontend/*.tsbuildinfo
 # Go
 backend/parkpulse
 *.log
+
+# Runtime holat fayllari (UI orqali kiritilgan sozlamalar)
+alerts.json
+devices.json

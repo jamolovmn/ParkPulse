@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Device } from '@/lib/useParkPulse';
 import Sparkline from '@/components/Sparkline';
 
@@ -20,6 +20,40 @@ export default function Devices({ devices }: { devices: Device[] }) {
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [found, setFound] = useState<number | null>(null);
+
+  // Kuzatuvni yoqish/o'chirish — faqat ★ qurilmalar uzilganda alert beradi.
+  // Server tanlovni saqlaydi va yangilangan ro'yxatni WS orqali darhol qaytaradi.
+  const toggleWatch = (d: Device) => {
+    fetch('/api/devices/watch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: d.ip, watched: !d.watched }),
+    }).catch(() => {});
+  };
+
+  // Qo'lda nom berish. Bo'sh nom — avtomatik nomga qaytaradi (server hal qiladi).
+  const [editIp, setEditIp] = useState<string | null>(null);
+  const [nameVal, setNameVal] = useState('');
+  const skipBlur = useRef(false); // Escape'da saqlamaslik uchun
+
+  const startEdit = (d: Device) => {
+    setEditIp(d.ip);
+    // Nomi yo'q (avto-nom = IP) bo'lsa bo'sh boshlaymiz — IP tahrir emas, yangi nom.
+    setNameVal(d.name === d.ip ? '' : d.name);
+  };
+  const commit = (ip: string) => {
+    if (skipBlur.current) {
+      skipBlur.current = false;
+      setEditIp(null);
+      return;
+    }
+    setEditIp(null);
+    fetch('/api/devices/name', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip, name: nameVal.trim() }),
+    }).catch(() => {});
+  };
 
   const scan = async () => {
     setScanning(true);
@@ -87,12 +121,18 @@ export default function Devices({ devices }: { devices: Device[] }) {
 
       <section className="rounded-xl border border-line bg-surface">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3">
-          <h2 className="text-sm font-medium">
-            Qurilmalar{' '}
-            <span className="text-ink-muted [font-variant-numeric:tabular-nums]">
-              {online}/{devices.length} onlayn
-            </span>
-          </h2>
+          <div>
+            <h2 className="text-sm font-medium">
+              Qurilmalar{' '}
+              <span className="text-ink-muted [font-variant-numeric:tabular-nums]">
+                {online}/{devices.length} onlayn
+              </span>
+            </h2>
+            <p className="mt-0.5 text-[11px] text-ink-muted">
+              <span className="text-warn">★</span> = uzilganda xabar beradi ·{' '}
+              <span className="text-ink-muted/50">☆</span> = e’tiborsiz
+            </p>
+          </div>
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -109,24 +149,67 @@ export default function Devices({ devices }: { devices: Device[] }) {
           <ul className="divide-y divide-grid">
             {rows.map((d) => {
               const hasQuality = (d.samples?.length ?? 0) > 1;
+              // Avto-topilgan qurilmada nom = IP. Shunda IP ni ikki marta
+              // ko'rsatmaymiz va pastki qatorda faqat portlar qoladi.
+              const hasName = d.name !== d.ip;
+              const sub = [hasName ? d.ip : '', d.ports?.length ? d.ports.join(', ') : '']
+                .filter(Boolean)
+                .join(' · ');
               return (
                 <li key={d.ip} className="px-5 py-3 text-sm">
                   <div className="flex items-center gap-3">
                     <span className={`h-2 w-2 shrink-0 rounded-full ${d.alive ? 'bg-good' : 'bg-critical'}`} />
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="truncate font-medium">{d.name}</span>
-                        {d.type && (
-                          <span className="rounded border border-line px-1.5 py-0.5 text-[10px] text-ink-muted">
-                            {d.type}
-                          </span>
+                        {editIp === d.ip ? (
+                          <input
+                            autoFocus
+                            value={nameVal}
+                            onChange={(e) => setNameVal(e.target.value)}
+                            onBlur={() => commit(d.ip)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') e.currentTarget.blur();
+                              if (e.key === 'Escape') {
+                                skipBlur.current = true;
+                                e.currentTarget.blur();
+                              }
+                            }}
+                            placeholder="Nom (Relay, Kamera, LED…)"
+                            className="w-48 rounded border border-accent bg-page px-2 py-0.5 text-sm outline-none"
+                          />
+                        ) : (
+                          <>
+                            <span
+                              className={`truncate font-medium ${
+                                hasName ? '' : 'text-ink-secondary [font-variant-numeric:tabular-nums]'
+                              }`}
+                            >
+                              {hasName ? d.name : d.ip}
+                            </span>
+                            <button
+                              onClick={() => startEdit(d)}
+                              title={hasName ? 'Nomni tahrirlash' : 'Nom berish'}
+                              aria-label="Nom berish"
+                              className="text-xs text-ink-muted/50 transition-colors hover:text-ink-muted"
+                            >
+                              ✎
+                            </button>
+                            {d.type && (
+                              <span className="rounded border border-line px-1.5 py-0.5 text-[10px] text-ink-muted">
+                                {d.type}
+                              </span>
+                            )}
+                            {d.vendor && (
+                              <span className="text-[10px] text-ink-muted">{d.vendor}</span>
+                            )}
+                          </>
                         )}
-                        {d.vendor && <span className="text-[10px] text-ink-muted">{d.vendor}</span>}
                       </div>
-                      <span className="text-xs text-ink-muted [font-variant-numeric:tabular-nums]">
-                        {d.ip}
-                        {d.ports?.length ? ` · ${d.ports.join(', ')}` : ''}
-                      </span>
+                      {sub && (
+                        <span className="text-xs text-ink-muted [font-variant-numeric:tabular-nums]">
+                          {sub}
+                        </span>
+                      )}
                     </div>
                     {hasQuality && <Sparkline data={d.samples!} />}
                     <span
@@ -136,6 +219,20 @@ export default function Devices({ devices }: { devices: Device[] }) {
                     >
                       {d.alive ? fmtMs(d.rtt_ms) : 'uzilgan'}
                     </span>
+                    <button
+                      onClick={() => toggleWatch(d)}
+                      title={
+                        d.watched
+                          ? 'Kuzatilmoqda — uzilsa xabar keladi. O‘chirish uchun bosing'
+                          : 'Kuzatilmayapti — xabar yo‘q. Yoqish uchun bosing'
+                      }
+                      aria-label="Kuzatishni almashtirish"
+                      className={`shrink-0 text-base leading-none transition-colors ${
+                        d.watched ? 'text-warn' : 'text-ink-muted/40 hover:text-ink-muted'
+                      }`}
+                    >
+                      {d.watched ? '★' : '☆'}
+                    </button>
                   </div>
 
                   {/* Ping sifati: jitter, yo'qotish, uptime, min/avg/max */}

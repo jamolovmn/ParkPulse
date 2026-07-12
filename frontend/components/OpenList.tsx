@@ -49,17 +49,16 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: 'ok', label: 'Muammosiz' },
 ];
 
-export default function OpenList({ opens }: { opens: Open[] }) {
+export default function OpenList({ opens, ghosts }: { opens: Open[]; ghosts: Open[] }) {
   const [filter, setFilter] = useState<Filter>('all');
   const [open, setOpen] = useState<string | null>(null);
 
-  const rows = useMemo(
-    () =>
-      opens.filter((o) =>
-        filter === 'all' ? true : filter === 'ghost' ? isSuspicious(o.kind) : !isSuspicious(o.kind)
-      ),
-    [opens, filter]
-  );
+  // "Arvoh ochilishlar" — alohida, uzoq saqlanadigan ro'yxatdan (opens 50 talik
+  // oynada arvohni siqib chiqarishi mumkin; KPI hisoblagichi bilan mos qolsin).
+  const rows = useMemo(() => {
+    if (filter === 'ghost') return ghosts;
+    return opens.filter((o) => (filter === 'all' ? true : !isSuspicious(o.kind)));
+  }, [opens, ghosts, filter]);
 
   return (
     <section className="rounded-xl border border-line bg-surface">
@@ -117,7 +116,7 @@ export default function OpenList({ opens }: { opens: Open[] }) {
                   {o.plate ? `${o.plate} · ` : ''}
                   {o.gate || 'darvoza noma’lum'}
                 </p>
-                <p className="mt-0.5 text-xs text-ink-muted">{o.reason}</p>
+                {o.reason && <p className="mt-0.5 text-xs text-ink-muted">{o.reason}</p>}
 
                 {/* Log faqat shubhali ochilishlar uchun yoziladi */}
                 {suspicious && (

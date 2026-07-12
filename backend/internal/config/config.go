@@ -33,6 +33,29 @@ type Config struct {
 	Analyzer         map[string]int `yaml:"analyzer"` // match_window_sec, autopay_sec, ...
 	RelayOpenRe      string         `yaml:"relay_open_re"`
 	RelayRemoteRe    string         `yaml:"relay_remote_re"`
+	Alerts           *AlertConfig   `yaml:"alerts"`
+	SNMP             *SNMPConfig    `yaml:"snmp"`
+}
+
+// AlertConfig — Telegram va/yoki webhook ogohlantirishlari.
+type AlertConfig struct {
+	Telegram struct {
+		Token  string `yaml:"token"`
+		ChatID string `yaml:"chat_id"`
+	} `yaml:"telegram"`
+	Webhook string `yaml:"webhook"`
+}
+
+type SNMPTarget struct {
+	Name      string `yaml:"name"`
+	IP        string `yaml:"ip"`
+	Community string `yaml:"community"`
+	Version   string `yaml:"version"` // "1" yoki "2c" (standart)
+}
+
+type SNMPConfig struct {
+	IntervalSec *int         `yaml:"interval_sec"`
+	Targets     []SNMPTarget `yaml:"targets"`
 }
 
 func candidatePaths() []string {
@@ -98,6 +121,39 @@ func (c *Config) apply() {
 	// analyzer: {match_window_sec: 180} -> MATCH_WINDOW_SEC=180
 	for k, v := range c.Analyzer {
 		setIfEmpty(strings.ToUpper(k), strconv.Itoa(v))
+	}
+
+	if c.Alerts != nil {
+		setIfEmpty("ALERT_TELEGRAM_TOKEN", c.Alerts.Telegram.Token)
+		setIfEmpty("ALERT_TELEGRAM_CHAT", c.Alerts.Telegram.ChatID)
+		setIfEmpty("ALERT_WEBHOOK_URL", c.Alerts.Webhook)
+	}
+
+	if c.SNMP != nil {
+		if c.SNMP.IntervalSec != nil {
+			setIfEmpty("SNMP_INTERVAL_SEC", strconv.Itoa(*c.SNMP.IntervalSec))
+		}
+		// targets: [{name,ip,community,version}] -> "name=ip@community#ver,..."
+		var ts []string
+		for _, t := range c.SNMP.Targets {
+			ip := strings.TrimSpace(t.IP)
+			if ip == "" {
+				continue
+			}
+			community := strings.TrimSpace(t.Community)
+			if community == "" {
+				community = "public"
+			}
+			s := ip + "@" + community
+			if v := strings.TrimSpace(t.Version); v != "" && v != "2c" {
+				s += "#" + v
+			}
+			if name := strings.TrimSpace(t.Name); name != "" {
+				s = name + "=" + s
+			}
+			ts = append(ts, s)
+		}
+		setIfEmpty("SNMP_TARGETS", strings.Join(ts, ","))
 	}
 }
 
