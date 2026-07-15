@@ -13,10 +13,12 @@ import (
 	"syscall"
 	"time"
 
+	"parkpulse/backend/internal/agent"
 	"parkpulse/backend/internal/alert"
 	"parkpulse/backend/internal/analyzer"
 	"parkpulse/backend/internal/collector"
 	"parkpulse/backend/internal/config"
+	"parkpulse/backend/internal/detector"
 	"parkpulse/backend/internal/logbuf"
 	"parkpulse/backend/internal/netmon"
 	"parkpulse/backend/internal/snmp"
@@ -32,15 +34,14 @@ func main() {
 		log.Printf("konfig o'qildi: %s", path)
 	}
 
-	// Har obyektda konteyner nomi har xil (p24gui, parking24-gateway-api, ...).
-	// Shuning uchun nom faqat env orqali keladi: TARGET_CONTAINER="p24gui"
-	// Bir nechta bo'lsa vergul bilan: TARGET_CONTAINER="p24gui,p24-relay"
-	names := strings.Split(os.Getenv("TARGET_CONTAINER"), ",")
-	if names[0] == "" {
-		log.Fatal("TARGET_CONTAINER env o'rnatilmagan (masalan: TARGET_CONTAINER=p24gui)")
-	}
-	for i := range names {
-		names[i] = strings.TrimSpace(names[i])
+	// Konteyner nomi env orqali kelishi mumkin: TARGET_CONTAINER="p24gui"
+	// (bir nechta bo'lsa vergul bilan). Endi bu MAJBURIY EMAS — UI'dan ham
+	// tanlanadi. Bo'sh bo'lsa, saqlangan tanlov yoki UI kutiladi.
+	var names []string
+	for _, n := range strings.Split(os.Getenv("TARGET_CONTAINER"), ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			names = append(names, n)
+		}
 	}
 
 	addr := os.Getenv("LISTEN_ADDR")
@@ -57,6 +58,11 @@ func main() {
 	}
 	buf := logbuf.New(30) // arvoh konteksti: oxirgi 30 qator
 	col.Buf = buf
+	det := detector.New() // aqlli log o'qish: shablon + to'lov korrelyatsiyasi
+	col.Detector = det
+	ai := agent.New() // AI DevOps yordamchisi (kalit kiritilmaguncha uxlaydi)
+	ai.LoadStore()
+	aiHub := agent.NewHub(ai) // CLI + Web bir xil sessiyaga ulanadi
 	anl := analyzer.New()
 	anl.ContextFn = buf.Snapshot
 	mon := netmon.New()
@@ -200,6 +206,143 @@ func main() {
 		}
 		mon.SetName(body.IP, body.Name)
 		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// Agent so'rovidan tokenni oladi (header yoki ?token=).
+	agentToken := func(r *http.Request) string {
+		if t := r.Header.Get("X-Pulse-Token"); t != "" {
+			return t
+		}
+		return r.URL.Query().Get("token")
+	}
+
+	// Parol bilan kirish — to'g'ri bo'lsa qurilma saqlaydigan token qaytaradi.
+	mux.HandleFunc("/api/agent/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST kerak", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Password string `json:"password"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		tok, ok := ai.Login(body.Password)
+		w.Header().Set("Content-Type", "application/json")
+		if !ok {
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]any{"ok": false})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "token": tok})
+	})
+
+	// AI agent jonli oqimi (WS) — parol yoqilgan bo'lsa token talab qiladi.
+	mux.HandleFunc("/api/agent/stream", func(w http.ResponseWriter, r *http.Request) {
+		if ai.AuthEnabled() && !ai.ValidToken(agentToken(r)) {
+			http.Error(w, "parol kerak", http.StatusUnauthorized)
+			return
+		}
+		aiHub.HandleWS(w, r)
+	})
+
+	// AI agent sozlamasi — GET holat (ochiq); POST — parol yoqilgan bo'lsa token kerak.
+	mux.HandleFunc("/api/agent/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(ai.Status())
+		case http.MethodPost:
+			if ai.AuthEnabled() && !ai.ValidToken(agentToken(r)) {
+				http.Error(w, "parol kerak", http.StatusUnauthorized)
+				return
+			}
+			var s agent.Settings
+			if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
+				http.Error(w, "yaroqsiz JSON", http.StatusBadRequest)
+				return
+			}
+			if err := ai.SetConfig(s); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(ai.Status())
+		default:
+			http.Error(w, "GET yoki POST kerak", http.StatusMethodNotAllowed)
+		}
+	})
+	// Provayderdagi modellar ro'yxati — UI'da avto tanlash uchun.
+	mux.HandleFunc("/api/agent/models", func(w http.ResponseWriter, r *http.Request) {
+		if ai.AuthEnabled() && !ai.ValidToken(agentToken(r)) {
+			http.Error(w, "parol kerak", http.StatusUnauthorized)
+			return
+		}
+		tctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		models, err := ai.Models(tctx)
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]any{"models": []string{}, "error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"models": models})
+	})
+
+	// Kalitni tekshirish — provayderga minimal so'rov.
+	mux.HandleFunc("/api/agent/test", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST kerak", http.StatusMethodNotAllowed)
+			return
+		}
+		tctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		w.Header().Set("Content-Type", "application/json")
+		if err := ai.Test(tctx); err != nil {
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	})
+
+	// Log inspector — oxirgi qatorlar + yorliq va avtomatik o'rganilgan shablonlar.
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"lines":   det.Lines(),
+			"learned": det.Learned(),
+		})
+	})
+
+	// Docker konteynerlar ro'yxati — UI'da kuzatiladiganini tanlash uchun.
+	mux.HandleFunc("/api/containers", func(w http.ResponseWriter, r *http.Request) {
+		list, err := col.ListContainers(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"containers": list})
+	})
+	// Kuzatiladigan konteynerlarni o'qish/o'rnatish (loglari real vaqtda tail qilinadi).
+	mux.HandleFunc("/api/target", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"targets": col.Targets()})
+		case http.MethodPost:
+			var body struct {
+				Targets []string `json:"targets"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "yaroqsiz JSON", http.StatusBadRequest)
+				return
+			}
+			col.SetTargets(body.Targets)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"targets": col.Targets()})
+		default:
+			http.Error(w, "GET yoki POST kerak", http.StatusMethodNotAllowed)
+		}
 	})
 
 	// Subnet skaner — tarmoqdagi qurilmalarni topadi

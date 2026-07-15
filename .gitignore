@@ -12,3 +12,8 @@ backend/parkpulse
 # Runtime holat fayllari (UI orqali kiritilgan sozlamalar)
 alerts.json
 devices.json
+target.json
+agent.json
+
+# Dizayn namunasi (build qismi emas)
+ai-dashboard.zip

@@ -8,20 +8,27 @@ import OpenList from '@/components/OpenList';
 import Devices from '@/components/Devices';
 import SnmpPanel from '@/components/SnmpPanel';
 import AlertSettings from '@/components/AlertSettings';
+import ContainerPicker from '@/components/ContainerPicker';
+import LogInspector from '@/components/LogInspector';
+import AgentWorkspace from '@/components/AgentWorkspace';
+import Heartbeat from '@/components/Heartbeat';
 import { HealthPanel, ContainerTable } from '@/components/Health';
 
 const fmtMs = (ms: number) => `${ms < 10 ? ms.toFixed(1) : String(Math.round(ms))} ms`;
 
-type Section = 'dashboard' | 'devices' | 'network' | 'system';
+type Section = 'dashboard' | 'devices' | 'network' | 'logs' | 'agent' | 'system';
 type Panel = 'passes' | 'opens';
 
 type NavItem = { id: Section; label: string; icon: string };
 
-const NAV: NavItem[] = [
+const NAV_HEAD: NavItem[] = [
   { id: 'dashboard', label: 'Boshqaruv', icon: '◈' },
   { id: 'devices', label: 'Qurilmalar', icon: '⌸' },
-  { id: 'system', label: 'Tizim', icon: '⚙' },
+  { id: 'logs', label: 'Loglar', icon: '≣' },
+  { id: 'agent', label: 'Agent', icon: '✦' },
 ];
+const NAV_SYSTEM: NavItem = { id: 'system', label: 'Tizim', icon: '⚙' };
+const NAV_NETWORK: NavItem = { id: 'network', label: 'Tarmoq', icon: '⇅' };
 
 export default function Dashboard() {
   const { connected, stats, passes, opens, ghosts, traffic, devices, snmp, speed, health } =
@@ -32,7 +39,7 @@ export default function Dashboard() {
   const offline = devices.filter((d) => !d.alive).length;
 
   // "Tarmoq" bo'limi faqat SNMP sozlangan bo'lsa ko'rinadi (bo'sh menyu bo'lmasin).
-  const nav = snmp.length > 0 ? [...NAV.slice(0, 2), { id: 'network' as const, label: 'Tarmoq', icon: '⇅' }, NAV[2]] : NAV;
+  const nav = [...NAV_HEAD, ...(snmp.length > 0 ? [NAV_NETWORK] : []), NAV_SYSTEM];
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:flex-row lg:gap-8 lg:py-8">
@@ -61,10 +68,15 @@ export default function Dashboard() {
 
         {section === 'devices' && <Devices devices={devices} />}
 
+        {section === 'logs' && <LogInspector />}
+
+        {section === 'agent' && <AgentWorkspace />}
+
         {section === 'network' && <SnmpPanel hosts={snmp} />}
 
         {section === 'system' && (
           <div className="space-y-6">
+            <ContainerPicker />
             <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
               <HealthPanel health={health} />
               <ContainerTable health={health} />
@@ -93,7 +105,7 @@ function Sidebar({
   return (
     <aside className="lg:w-52 lg:shrink-0">
       <div className="mb-6 hidden items-center gap-2.5 lg:flex">
-        <span className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-good' : 'bg-critical'}`} />
+        <Heartbeat live={connected} />
         <div>
           <p className="text-sm font-semibold tracking-tight">ParkPulse</p>
           <p className="text-[11px] text-ink-muted">Smart Parking</p>
@@ -146,10 +158,9 @@ function Header({ connected, speed }: { connected: boolean; speed: Speed | null 
             {Math.round(speed.ping_ms)} ms
           </span>
         )}
-        <span
-          className={`h-2.5 w-2.5 rounded-full lg:hidden ${connected ? 'bg-good' : 'bg-critical'}`}
-          title={connected ? 'Ulangan' : 'Uzilgan'}
-        />
+        <span className="lg:hidden">
+          <Heartbeat live={connected} />
+        </span>
       </div>
     </header>
   );

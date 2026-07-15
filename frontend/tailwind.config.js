@@ -14,6 +14,17 @@ module.exports = {
         good: '#0ca30c',
         warn: '#fab219',
         critical: '#d03b3b',
+        // Agent terminali uchun (GitHub-dark uslubi)
+        term: {
+          bg: '#0b0f14',
+          green: '#3fb950',
+          yellow: '#d29922',
+          red: '#f85149',
+          blue: '#58a6ff',
+          cyan: '#39c5cf',
+          magenta: '#bc8cff',
+          gray: '#8b949e',
+        },
       },
     },
   },

@@ -57,6 +57,12 @@ the single most common source of false ghost alerts.
   breakdown. Remote/auto-pay openings are flagged and excluded from the average
   so a driver's dwell time never inflates the KPI.
 - **Four-state opening classifier** (see above).
+- **Adaptive log reading** — no fixed vendor format required. Gate keywords are
+  multilingual/configurable, and a correlation detector *learns* which log line
+  means "barrier opened" by watching what consistently follows a payment — so it
+  works on installations whose wording differs, with no regex edits and no AI.
+- **Live log inspector** — see each log line with the label ParkPulse gave it
+  (ANPR / POS / OPEN / …), so mismatches are obvious at a glance.
 - **24-hour traffic chart** — hourly entries vs. exits.
 - **Network device monitoring** — subnet scan, device fingerprinting
   (camera/web/unknown + vendor), and per-device **ping quality**: jitter, packet
@@ -85,8 +91,11 @@ docker run -d --name parkpulse \
 Then open `http://localhost:8888`.
 
 - `TARGET_CONTAINER` — the container whose logs to read (comma-separated for
-  several). This is the only required setting.
-- The Docker socket mount lets ParkPulse tail logs and read `docker stats`.
+  several). **Optional** — you can also pick the container(s) live from the
+  dashboard (**Tizim → Kuzatiladigan konteyner**); the choice is saved
+  (`TARGET_STORE`, default `target.json`) and applied without a restart.
+- The Docker socket mount lets ParkPulse list containers, tail logs, and read
+  `docker stats`.
 - `--network host` is what makes LAN device scanning and pinging work.
 
 ### Build it yourself
@@ -107,7 +116,7 @@ point `CONFIG_FILE` at it.
 
 | Env | Default | Purpose |
 |-----|---------|---------|
-| `TARGET_CONTAINER` | — (required) | Container name(s) to tail, comma-separated. |
+| `TARGET_CONTAINER` | — | Container name(s) to tail, comma-separated. Optional — can also be chosen from the dashboard. |
 | `LISTEN_ADDR` | `:8888` | HTTP/WebSocket listen address. |
 | `DEVICES` | — | Monitored devices: `name=ip,name=ip`. |
 | `SCAN_SUBNET` | auto | Subnet(s) for the scanner, e.g. `192.168.1.0/24`. |
@@ -117,6 +126,11 @@ point `CONFIG_FILE` at it.
 | `PRESENCE_SEC` | `60` | How long an ANPR read counts as "car on the sensor". |
 | `RELAY_OPEN_RE` | built-in | Regex for the physical barrier-open log line. |
 | `RELAY_REMOTE_RE` | built-in | Regex for the guard's remote-open signal. |
+| `GATE_ENTER_WORDS` | `enter,entry,kirish,in` | Words that mean an entry lane (comma-separated, any language). |
+| `GATE_EXIT_WORDS` | `exit,chiqish,out` | Words that mean an exit lane. |
+| `OPEN_LEARN_WINDOW_SEC` | `8` | Max gap after a payment for a log line to count as the "open" line. |
+| `OPEN_LEARN_MIN` | `5` | How many correlated occurrences before an "open" template is trusted. |
+| `OPEN_LEARN_RATIO` | `0.6` | Fraction of a template's occurrences that must follow a payment. |
 | `SNMP_TARGETS` | — | SNMP devices: `name=ip@community`, comma-separated. Add `#1` for SNMP v1. |
 | `SNMP_INTERVAL_SEC` | `30` | SNMP poll interval. |
 | `ALERT_TELEGRAM_TOKEN` | — | Telegram bot token (from @BotFather). |
@@ -125,6 +139,27 @@ point `CONFIG_FILE` at it.
 
 The two regexes let you adapt ParkPulse to a controller whose log wording
 differs, without rebuilding.
+
+## Adaptive log reading
+
+Different controllers/sites word their logs differently, so a single fixed regex
+misses events on some installations. ParkPulse handles this **deterministically —
+no AI, fully offline** — in three layers:
+
+1. **Multilingual gate words.** Entry/exit are matched from a configurable word
+   list (`GATE_ENTER_WORDS` / `GATE_EXIT_WORDS`) — `exit 1`, `chiqish 1`, `out 3`
+   all normalize to the same canonical gate.
+2. **Correlation learning.** Each unmatched line is reduced to a *template*
+   (numbers and plates → `#`). The template that consistently appears within a
+   few seconds **after a payment** is learned to be the "barrier opened" line —
+   ParkPulse then treats it as an open event even though no regex matched it.
+3. **Direction from behaviour, not words.** A learned open that follows a payment
+   is an **exit**; one that follows only a plate read (no payment) is an
+   **entry**. So the entry/exit split is inferred from what actually happened.
+
+Watch it work in the **Loglar (Logs)** tab: every line shows the label ParkPulse
+gave it, `OPEN∗` marks an auto-detected open, and a banner shows the learned
+template. Nothing is sent anywhere — the learning happens in-process.
 
 ## Alerting
 

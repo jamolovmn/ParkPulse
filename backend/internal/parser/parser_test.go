@@ -139,3 +139,28 @@ func TestParseIgnoresNoise(t *testing.T) {
 		}
 	}
 }
+
+func TestGateMultilingual(t *testing.T) {
+	cases := map[string]string{
+		"Relay chiqish 1: opened":                              "exit 1",
+		"Relay kirish 2: Impulse":                              "enter 2",
+		"Vendotek exit 1: Requesting payment: 01A123BC (5000)": "exit 1",
+		"Relay exit: - RelayWorker.cpp":                        "exit 1", // raqamsiz -> 1
+	}
+	for line, want := range cases {
+		if got := gateOf(line); got != want {
+			t.Errorf("gateOf(%q) = %q, kutildi %q", line, got, want)
+		}
+	}
+}
+
+func TestDetectMultilingualPOS(t *testing.T) {
+	// enter|exit literal yo'q — 'chiqish' bilan ham POS topilishi va gate exit bo'lishi kerak.
+	kind, ev := Detect("c", "20260101 10:00:00.000000 UTC 1 DEBUG [pay] Vendotek chiqish 1: Requesting payment: 01A123BC (5000)")
+	if kind != "POS" || ev == nil {
+		t.Fatalf("POS kutildi, kind=%q ev=%v", kind, ev)
+	}
+	if ev.Gate != "exit 1" {
+		t.Errorf("gate 'exit 1' kutildi, %q chiqdi", ev.Gate)
+	}
+}

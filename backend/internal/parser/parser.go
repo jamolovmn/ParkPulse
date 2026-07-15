@@ -15,6 +15,7 @@ package parser
 import (
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -49,17 +50,17 @@ var (
 	reGateway = regexp.MustCompile(`(?i)\bIn flight mode started\b|\bRecent permit found and assigned\b`)
 	// 3-qadam (DB): permit topildi yoki yaratildi
 	rePermit = regexp.MustCompile(`(?i)\bCurrent permit found and assigned\b|\bPermit(?: visit)? created\b`)
-	// 4-qadam (POS): FAQAT to'lov so'rovlari. "Processing payment", "Idle state",
-	// "VRP canceled" ham "Vendotek exit" bilan boshlanadi — ular to'lov EMAS.
-	rePOS = regexp.MustCompile(`(?i)\b(?:Vendotek|QR)\s+((?:enter|exit)\s+\d+):\s*(?:Requesting payment|The uid is already being processed)`)
+	// 4-qadam (POS): to'lov so'rovi. Darvoza endi bu yerda emas — ko'p tilli
+	// gateOf() orqali olinadi. "Processing payment", "Idle state" — to'lov EMAS.
+	rePOS = regexp.MustCompile(`(?i)\b(?:Vendotek|QR)\b[^\n]*?(?:Requesting payment|The uid is already being processed)`)
 
 	// Shlagbaumning jismoniy ochilishi. RelayWorker qatori ochilish deb faqat
 	// tanasi bo'sh bo'lsa ("Relay exit 1:  - RelayWorker.cpp") yoki ochish
 	// fe'li bo'lsa hisoblanadi. Aks holda bu shunchaki apparat holati.
-	// RELAY_OPEN_RE env orqali obyekt log formatiga moslanadi (darvoza uchun
-	// birinchi guruh bo'lsa ishlatiladi, bo'lmasa matndan topiladi).
+	// RELAY_OPEN_RE env orqali obyekt log formatiga moslanadi. Darvoza matndan
+	// (gateOf) topiladi, shuning uchun bu yerda guruh shart emas.
 	reOpen = envRegexp("RELAY_OPEN_RE",
-		`(?i)\bRelay\s+((?:enter|exit)\s+\d+):\s*(?:-\s*RelayWorker\.cpp|(?:Open(?:ed|ing)?|Switch(?:ed)?\s+on|Impulse|Pulse)\b)`)
+		`(?i)\bRelay\b[^\n]*?(?:-\s*RelayWorker\.cpp|Open(?:ed|ing)?|Switch(?:ed)?\s+on|Impulse|Pulse)\b`)
 
 	// RelayWorker/Vendotek shovqini: ulanish xatolari, qayta urinishlar.
 	// "Connection is closed" tarmoq xatosi — darvoza ochilishi EMAS.
@@ -73,8 +74,12 @@ var (
 	reRemote = envRegexp("RELAY_REMOTE_RE",
 		`(?i)\b(?:remote|manual|pult)\b[^\n]*\bopen|\bOpen(?:ed|ing)?\s+(?:by|from)\s+(?:operator|guard|remote|pult|button)\b`)
 
-	// Darvoza nomi: "exit 1", "enter 2"
-	reGate = regexp.MustCompile(`(?i)\b(enter|exit)\s+(\d+)\b`)
+	// Darvoza so'zlari ko'p tilli va sozlanadigan (GATE_ENTER_WORDS/GATE_EXIT_WORDS).
+	// Har obyekt loglari o'z tilida bo'lishi mumkin — "exit 1", "chiqish 1", ...
+	enterWords = gateWords("GATE_ENTER_WORDS", "enter,entry,kirish,in")
+	exitWords  = gateWords("GATE_EXIT_WORDS", "exit,chiqish,out")
+	// Darvoza nomi: so'z + ixtiyoriy raqam ("exit 1", "chiqish", "enter 2").
+	reGate = buildGateRe(enterWords, exitWords)
 	// Nomzod token: harf ham, raqam ham qatnashgan 5-10 belgi (pastda filtrlanadi)
 	rePlateToken = regexp.MustCompile(`\b([A-Z0-9]+)\b`)
 	// Dastur o'z logidagi vaqt: "20260703 12:59:02.065187 UTC"
@@ -106,10 +111,14 @@ func Clean(line string) string {
 }
 
 // Parse bitta log qatorini tekshiradi. Tanish hodisa bo'lmasa nil qaytaradi.
-// Vaqt ustuvorligi: dastur o'z vaqti (eng aniq) -> Docker vaqti -> hozirgi vaqt.
 func Parse(container, line string) *Event {
-	line = strings.TrimRight(line, "\r\n")
+	_, ev := Detect(container, line)
+	return ev
+}
 
+// tsMsg qatordan vaqtni (Docker/dastur/hozirgi) va Docker prefiksisiz matnni ajratadi.
+func tsMsg(line string) (time.Time, string) {
+	line = strings.TrimRight(line, "\r\n")
 	ts := time.Now()
 	msg := line
 	if m := reDockerTS.FindStringSubmatch(line); m != nil {
@@ -123,43 +132,52 @@ func Parse(container, line string) *Event {
 			ts = t
 		}
 	}
+	return ts, msg
+}
+
+// TimeOf qatorning log vaqtini qaytaradi (detektor korrelyatsiyasi uchun).
+func TimeOf(line string) time.Time { t, _ := tsMsg(line); return t }
+
+// GateOf va ExtractPlate — detektor uchun ochiq yordamchilar.
+func GateOf(msg string) string       { return gateOf(msg) }
+func ExtractPlate(msg string) string { return extractPlate(msg) }
+
+// Detect qatorni tahlil qilib, YORLIQ (inspector/detektor uchun) va hodisani
+// qaytaradi. Yorliq: "ANPR"/"GATEWAY"/"PERMIT"/"POS"/"OPEN"/"REMOTE"/"NOISE"/"".
+// Hodisa bo'lmasa ev == nil (masalan "NOISE" yoki "" — tanilmagan qator).
+// Vaqt ustuvorligi: dastur o'z vaqti (eng aniq) -> Docker vaqti -> hozirgi vaqt.
+func Detect(container, line string) (kind string, ev *Event) {
+	ts, msg := tsMsg(line)
 
 	if m := reANPR.FindStringSubmatch(msg); m != nil {
-		return &Event{Type: EventANPR, Timestamp: ts, Container: container, Plate: strings.ToUpper(m[1]), Raw: msg}
+		return "ANPR", &Event{Type: EventANPR, Timestamp: ts, Container: container, Plate: strings.ToUpper(m[1]), Raw: msg}
 	}
 	if reGateway.MatchString(msg) {
-		return midStep(EventGateway, ts, container, msg)
+		return "GATEWAY", midStep(EventGateway, ts, container, msg)
 	}
 	if rePermit.MatchString(msg) {
-		return midStep(EventPermit, ts, container, msg)
+		return "PERMIT", midStep(EventPermit, ts, container, msg)
 	}
 	// Apparat shovqini hech qachon ochilish emas — qolgan qoidalardan oldin kesamiz.
 	if reRelayNoise.MatchString(msg) {
-		return nil
+		return "NOISE", nil
 	}
-	if m := rePOS.FindStringSubmatch(msg); m != nil {
-		return &Event{
+	if rePOS.MatchString(msg) {
+		return "POS", &Event{
 			Type: EventPOS, Timestamp: ts, Container: container,
-			Gate: normGate(m[1]), Plate: extractPlate(msg), Raw: msg,
+			Gate: gateOf(msg), Plate: extractPlate(msg), Raw: msg,
 		}
 	}
-	if m := reOpen.FindStringSubmatch(msg); m != nil {
-		gate := ""
-		if len(m) > 1 {
-			gate = normGate(m[1])
-		}
-		if gate == "" {
-			gate = gateOf(msg) // maxsus regexda guruh bo'lmasa
-		}
-		return &Event{
+	if reOpen.MatchString(msg) {
+		return "OPEN", &Event{
 			Type: EventOpen, Timestamp: ts, Container: container,
-			Gate: gate, Plate: extractPlate(msg), Raw: msg,
+			Gate: gateOf(msg), Plate: extractPlate(msg), Raw: msg,
 		}
 	}
 	if reRemote.MatchString(msg) {
-		return &Event{Type: EventRemote, Timestamp: ts, Container: container, Gate: gateOf(msg), Raw: msg}
+		return "REMOTE", &Event{Type: EventRemote, Timestamp: ts, Container: container, Gate: gateOf(msg), Raw: msg}
 	}
-	return nil
+	return "", nil
 }
 
 // midStep oraliq qadam (GATEWAY/PERMIT) hodisasini yasaydi; qatorda raqam
@@ -168,15 +186,59 @@ func midStep(t EventType, ts time.Time, container, msg string) *Event {
 	return &Event{Type: t, Timestamp: ts, Container: container, Plate: extractPlate(msg), Raw: msg}
 }
 
-func normGate(s string) string {
-	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+// gateWords env'dan (yoki standartdan) darvoza so'zlari ro'yxatini o'qiydi.
+func gateWords(key, def string) []string {
+	v := os.Getenv(key)
+	if strings.TrimSpace(v) == "" {
+		v = def
+	}
+	var out []string
+	for _, w := range strings.Split(v, ",") {
+		if w = strings.TrimSpace(strings.ToLower(w)); w != "" {
+			out = append(out, w)
+		}
+	}
+	return out
 }
 
-func gateOf(msg string) string {
-	if m := reGate.FindStringSubmatch(msg); m != nil {
-		return normGate(m[1] + " " + m[2])
+// buildGateRe barcha kirish/chiqish so'zlaridan bitta regex yasaydi: "so'z [raqam]".
+// Uzunroq so'zlar avval sinovdan o'tsin uchun uzunligi bo'yicha saralanadi.
+func buildGateRe(enter, exit []string) *regexp.Regexp {
+	all := append(append([]string{}, enter...), exit...)
+	sort.Slice(all, func(i, j int) bool { return len(all[i]) > len(all[j]) })
+	for i := range all {
+		all[i] = regexp.QuoteMeta(all[i])
 	}
-	return ""
+	if len(all) == 0 {
+		all = []string{"enter", "exit"}
+	}
+	return regexp.MustCompile(`(?i)\b(` + strings.Join(all, "|") + `)\b\s*#?(\d+)?`)
+}
+
+// gateOf matndan darvozani topib kanonik "enter N" / "exit N" ko'rinishida qaytaradi.
+func gateOf(msg string) string {
+	m := reGate.FindStringSubmatch(msg)
+	if m == nil {
+		return ""
+	}
+	return canonGate(m[1], m[2])
+}
+
+// canonGate so'z + raqamni kanonik darvoza nomiga aylantiradi. So'z kirish
+// ro'yxatida bo'lsa "enter", aks holda "exit". Raqam bo'lmasa "1".
+func canonGate(word, num string) string {
+	w := strings.ToLower(word)
+	dir := "exit"
+	for _, e := range enterWords {
+		if e == w {
+			dir = "enter"
+			break
+		}
+	}
+	if num == "" {
+		num = "1"
+	}
+	return dir + " " + num
 }
 
 func extractPlate(msg string) string {
