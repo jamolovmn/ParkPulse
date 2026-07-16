@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,26 +18,67 @@ import (
 // holat sinxron. Bir vaqtda bitta suhbat qadami ishlaydi (busy qulf).
 
 const (
-	maxSteps      = 12 // bitta xabarga tool-tsikl qadamlari chegarasi
+	maxSteps      = 30 // bitta xabarga tool-tsikl qadamlari chegarasi (chuqur tekshirish uchun)
 	confirmExpiry = 5 * time.Minute
 )
 
-const systemPrompt = `You are the ParkPulse DevOps agent, embedded in the ParkPulse
-monitoring server and running on its host. You help diagnose and fix operational
-issues (crashed containers, config edits, log analysis) for this deployment.
+const baseSystemPrompt = `You are the ParkPulse DevOps agent — an autonomous operator
+with REAL shell access on this server. You diagnose and FIX operational issues
+(crashed containers, bad configs, resource problems) end-to-end, by yourself.
 
 Tools: bash, read_file, write_file, docker_ps, docker_logs, docker_restart.
+Privileged commands work: sudo is installed and a sudo password may be configured,
+so "sudo <cmd>" runs non-interactively. Never ask the user to run a command — run
+it yourself with the bash tool.
 
-Rules:
-- Investigate before acting. For a config change, read the file first, make the
-  minimal edit, then verify.
-- You run with real shell access. Privileged commands work: if a command needs
-  root, just prefix it with "sudo" — a sudo password may be configured, so sudo
-  runs non-interactively. Never ask the user to run commands for you; run them
-  yourself with the bash tool.
+HOW TO WORK — this is the most important part:
+- NEVER guess and NEVER give shallow answers. "It probably restarted" is a failure.
+  Find the ROOT cause with concrete evidence: WHY did it restart? OOM kill? panic?
+  non-zero exit code? a specific error line in the logs? a failed dependency?
+- Investigate iteratively, like a senior engineer: form a hypothesis → gather
+  evidence with tools → refine → repeat. Chain MANY tool calls before concluding.
+- Don't assume the environment. Detect it first when unsure: check the OS
+  (cat /etc/os-release), which tools exist, container names (docker ps). Use the
+  right commands: docker logs --tail, docker inspect (State.ExitCode, OOMKilled,
+  RestartCount), journalctl, dmesg | grep -i oom, df -h, free -m, ps aux, exit codes.
+- Read the ACTUAL logs, don't skim. grep for error/fatal/panic/killed, look at
+  timestamps around the incident, follow the chain of events.
+- When you fix something: make the MINIMAL change, then VERIFY it worked (re-run the
+  check, confirm the service is healthy). Never claim success without proof.
+- Final answer must be specific: the root cause, the evidence you found, what you
+  changed, and how you verified it. Be concise but concrete. Reply in the user's
+  language.
 - Destructive commands (rm, drop, kill/stop containers, mkfs, ...) are gated: call
-  them normally — the harness pauses and asks the user for Y/N before running them.
-- Be concise. Reply in the user's language.`
+  them normally — the harness pauses and asks the user for Y/N before running them.`
+
+// systemPrompt — asosiy ko'rsatma + operator bergan loyiha ko'rsatmasi (AGENT.md).
+// Har so'rovda qayta o'qiladi, shuning uchun faylni tahrirlash darhol ta'sir qiladi.
+func systemPrompt() string {
+	p := baseSystemPrompt
+	if extra := readInstructions(); extra != "" {
+		p += "\n\n# Deployment-specific notes (from the operator — trust these)\n" + extra
+	}
+	return p
+}
+
+// readInstructions loyihaga xos ko'rsatmani o'qiydi. Yo'l: AGENT_INSTRUCTIONS env
+// yoki standart "AGENT.md". Bu yerga operator o'z tizimi haqida yozadi: konteyner
+// nomlari, log formati, tez-tez uchraydigan muammolar, qadamlar va h.k.
+func readInstructions() string {
+	path := strings.TrimSpace(os.Getenv("AGENT_INSTRUCTIONS"))
+	if path == "" {
+		path = "AGENT.md"
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	const max = 16000
+	if len(b) > max {
+		b = b[:max]
+	}
+	return strings.TrimSpace(string(b))
+}
 
 // Event — CLI va Web'ga yuboriladigan yagona hodisa konverti.
 type Event struct {
@@ -162,7 +205,7 @@ func (h *Hub) run(ctx context.Context) {
 			return
 		}
 		h.emit(Event{Type: "status", State: "thinking"})
-		text, calls, err := h.mgr.complete(ctx, systemPrompt, h.snapshotHist(), h.reg.Specs())
+		text, calls, err := h.mgr.complete(ctx, systemPrompt(), h.snapshotHist(), h.reg.Specs())
 		if err != nil {
 			if ctx.Err() != nil { // xato emas — foydalanuvchi to'xtatdi
 				h.emit(Event{Type: "status", State: "idle"})

@@ -26,6 +26,9 @@ COPY --from=backend /parkpulse /usr/local/bin/parkpulse
 # `pulse-cli` buyrug'i — konteynerda AI agent bilan interaktiv sessiya (claude kabi).
 COPY --from=backend /pulse-cli /usr/local/bin/pulse-cli
 COPY --from=frontend /build/out /app/static
+# Agent'ga loyihaga xos ko'rsatma (domen bilimi). Operator o'zinikini shu yo'lga
+# mount qilib almashtira oladi (ioEdge Volumes: host/AGENT.md -> /app/AGENT.md).
+COPY AGENT.md /app/AGENT.md
 # Entrypoint: host'ga `pulse`/`parkpulse` buyruqlarini avto o'rnatadi (bin mount bo'lsa),
 # so'ng serverni ishga tushiradi.
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
@@ -33,7 +36,8 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENV STATIC_DIR=/app/static \
     LISTEN_ADDR=:8888 \
-    PULSE_HOST_BIN=/host/bin
+    PULSE_HOST_BIN=/host/bin \
+    AGENT_INSTRUCTIONS=/app/AGENT.md
 
 EXPOSE 8888
 ENTRYPOINT ["docker-entrypoint.sh"]

@@ -18,7 +18,7 @@ import (
 
 const (
 	toolTimeout = 60 * time.Second
-	maxOutput   = 8000 // tool chiqishi shu belgidan uzun bo'lsa kesiladi (kontekst uchun)
+	maxOutput   = 16000 // tool chiqishi shu belgidan uzun bo'lsa kesiladi (chuqurroq log o'qish)
 )
 
 // Tool — agent chaqira oladigan bitta qobiliyat.
