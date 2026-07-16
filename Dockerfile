@@ -18,7 +18,10 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /parkpulse ./cmd/server \
 
 # ---------- 3-bosqich: Yakuniy yengil image ----------
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata
+# sudo — agent (bash tool) root huquqli buyruqlar bajarishi uchun. Konteyner
+# odatda root sifatida ishlaydi (sudo parolsiz), non-root bo'lsa UI'dagi sudo
+# paroli askpass orqali ishlatiladi.
+RUN apk add --no-cache ca-certificates tzdata sudo
 COPY --from=backend /parkpulse /usr/local/bin/parkpulse
 # `pulse-cli` buyrug'i — konteynerda AI agent bilan interaktiv sessiya (claude kabi).
 COPY --from=backend /pulse-cli /usr/local/bin/pulse-cli
