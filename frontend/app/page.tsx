@@ -8,7 +8,6 @@ import OpenList from '@/components/OpenList';
 import Devices from '@/components/Devices';
 import SnmpPanel from '@/components/SnmpPanel';
 import AlertSettings from '@/components/AlertSettings';
-import ContainerPicker from '@/components/ContainerPicker';
 import AgentWorkspace from '@/components/AgentWorkspace';
 import Heartbeat from '@/components/Heartbeat';
 import { HealthPanel, ContainerTable } from '@/components/Health';
@@ -72,7 +71,6 @@ export default function Dashboard() {
 
         {section === 'system' && (
           <div className="space-y-6">
-            <ContainerPicker />
             <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
               <HealthPanel health={health} />
               <ContainerTable health={health} />

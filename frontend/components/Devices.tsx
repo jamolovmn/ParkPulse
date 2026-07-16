@@ -85,8 +85,14 @@ export default function Devices({ devices }: { devices: Device[] }) {
           [d.name, d.ip, d.type, d.vendor].some((v) => v?.toLowerCase().includes(q))
         )
       : devices;
-    // Uzilganlar tepada — muammo ko'zga birinchi tashlansin.
-    return [...list].sort((a, b) => Number(a.alive) - Number(b.alive) || a.ip.localeCompare(b.ip));
+    // ★ belgilanganlar (kuzatiladigan) eng tepada; keyin uzilganlar (muammo
+    // ko'zga birinchi tashlansin); oxirida IP bo'yicha.
+    return [...list].sort(
+      (a, b) =>
+        Number(b.watched) - Number(a.watched) ||
+        Number(a.alive) - Number(b.alive) ||
+        a.ip.localeCompare(b.ip)
+    );
   }, [devices, query]);
 
   const online = devices.filter((d) => d.alive).length;

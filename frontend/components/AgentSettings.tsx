@@ -13,12 +13,12 @@ type Status = {
   auth: boolean;
 };
 
-const PROVIDERS: { id: Provider; label: string; modelHint: string; keyLabel: string }[] = [
-  { id: 'anthropic', label: 'Anthropic (Claude)', modelHint: 'claude-opus-4-8', keyLabel: 'sk-ant-…' },
-  { id: 'openrouter', label: 'OpenRouter (ko‘p model)', modelHint: 'anthropic/claude-opus-4-8', keyLabel: 'sk-or-…' },
-  { id: 'openai', label: 'OpenAI', modelHint: 'gpt-4o', keyLabel: 'sk-…' },
-  { id: 'nvidia', label: 'NVIDIA', modelHint: 'meta/llama-3.1-70b-instruct', keyLabel: 'nvapi-…' },
-  { id: 'local', label: 'Local / boshqa (OpenAI-mos)', modelHint: 'llama3.1', keyLabel: 'ixtiyoriy' },
+const PROVIDERS: { id: Provider; label: string; keyLabel: string }[] = [
+  { id: 'anthropic', label: 'Anthropic (Claude)', keyLabel: 'sk-ant-…' },
+  { id: 'openrouter', label: 'OpenRouter (ko‘p model)', keyLabel: 'sk-or-…' },
+  { id: 'openai', label: 'OpenAI', keyLabel: 'sk-…' },
+  { id: 'nvidia', label: 'NVIDIA', keyLabel: 'nvapi-…' },
+  { id: 'local', label: 'Local / boshqa (OpenAI-mos)', keyLabel: 'ixtiyoriy' },
 ];
 
 export const PULSE_TOKEN = 'pulse_token'; // localStorage kaliti (qurilma tokeni)
@@ -26,7 +26,7 @@ export const PULSE_TOKEN = 'pulse_token'; // localStorage kaliti (qurilma tokeni
 const field =
   'w-full rounded-lg border border-line bg-page px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none';
 
-export default function AgentSettings() {
+export default function AgentSettings({ onSaved }: { onSaved?: (s: Status) => void } = {}) {
   const [status, setStatus] = useState<Status | null>(null);
   const [provider, setProvider] = useState<Provider>('anthropic');
   const [apiKey, setApiKey] = useState('');
@@ -86,10 +86,13 @@ export default function AgentSettings() {
       });
       if (r.status === 401) throw new Error('parol kerak — Agent bo‘limida kiring');
       if (!r.ok) throw new Error(await r.text());
-      setStatus(await r.json());
+      const s: Status = await r.json();
+      setStatus(s);
       setApiKey('');
       setPassword('');
       setMsg({ ok: true, text: 'Saqlandi' });
+      onSaved?.(s);
+      if (s.key_set) fetchModels(); // kalit saqlangach modellar avto ro'yxati
     } catch (e) {
       setMsg({ ok: false, text: `Xato: ${e instanceof Error ? e.message : e}` });
     } finally {
@@ -141,19 +144,27 @@ export default function AgentSettings() {
             <label className="space-y-1.5">
               <span className="text-xs font-medium text-ink-secondary">Model</span>
               <div className="flex gap-2">
-                {models.length > 0 ? (
-                  <select className={field} value={model} onChange={(e) => setModel(e.target.value)}>
-                    <option value="">— tanlang —</option>
-                    {model && !models.includes(model) && <option value={model}>{model} (joriy)</option>}
-                    {models.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input className={field} placeholder={meta.modelHint} value={model} onChange={(e) => setModel(e.target.value)} />
-                )}
+                {/* Qo'lda yozish yo'q — model faqat ro'yxatdan tanlanadi (avto keladi). */}
+                <select
+                  className={`${field} disabled:opacity-60`}
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  disabled={models.length === 0}
+                >
+                  {models.length === 0 ? (
+                    <option value="">{loadingModels ? 'yuklanmoqda…' : 'kalitni saqlang — avto keladi'}</option>
+                  ) : (
+                    <>
+                      <option value="">— tanlang —</option>
+                      {model && !models.includes(model) && <option value={model}>{model} (joriy)</option>}
+                      {models.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </>
+                  )}
+                </select>
                 <button
                   type="button"
                   onClick={fetchModels}
@@ -164,7 +175,7 @@ export default function AgentSettings() {
                 </button>
               </div>
               <span className="block text-[11px] text-ink-muted">
-                {models.length ? `${models.length} ta model — ro‘yxatdan tanlang` : 'Kalitni saqlab ↻ bosing — avto ro‘yxat'}
+                {models.length ? `${models.length} ta model — ro‘yxatdan tanlang` : 'Modellar avtomatik keladi (kalit saqlangach)'}
               </span>
             </label>
           </div>
@@ -189,12 +200,12 @@ export default function AgentSettings() {
               <span className="text-xs font-medium text-ink-secondary">Baza URL (ixtiyoriy)</span>
               <input
                 className={field}
-                placeholder={status?.base_url || 'provayder standarti'}
+                placeholder="bo‘sh qoldiring = provayder standarti"
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
               />
               <span className="block text-[11px] text-ink-muted">
-                Bo‘sh — standart. Har qanday OpenAI-mos provayder (MiniMax, Groq, DeepSeek…) shu yerdan.
+                Odatda bo‘sh. Faqat boshqa OpenAI-mos provayder (MiniMax, Groq, DeepSeek…) uchun to‘ldiring.
               </span>
             </label>
             <label className="space-y-1.5">

@@ -164,13 +164,16 @@ func (m *Manager) Enabled() bool {
 func (m *Manager) Status() Status {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	_, key, model, base := m.resolved()
+	// RAW qiymatlar — foydalanuvchi aynan nima kiritgan bo'lsa shu. Default
+	// (masalan anthropic URL yoki model) UI'ga to'ldirilmaydi; u faqat haqiqiy
+	// API chaqiruvida resolved() orqali qo'llanadi. Shunda base_url va model
+	// maydonlari kiritilmaguncha bo'sh turadi.
 	st := Status{
-		Enabled: m.Enabled(), Provider: m.provider, Model: model,
-		BaseURL: base, KeySet: key != "", Auth: len(m.passHash) > 0,
+		Enabled: m.Enabled(), Provider: m.provider, Model: m.model,
+		BaseURL: m.baseURL, KeySet: m.apiKey != "", Auth: len(m.passHash) > 0,
 	}
-	if n := len(key); n >= 4 {
-		st.KeyHint = "…" + key[n-4:]
+	if n := len(m.apiKey); n >= 4 {
+		st.KeyHint = "…" + m.apiKey[n-4:]
 	}
 	return st
 }
