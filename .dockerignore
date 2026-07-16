@@ -4,3 +4,4 @@ frontend/out
 .git
 .claude
 *.md
+!AGENT.md
