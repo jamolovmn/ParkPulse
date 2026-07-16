@@ -7,9 +7,7 @@ import {
   Terminal,
   ScrollText,
   X,
-  ChevronDown,
-  Sparkles,
-  AtSign,
+  Settings,
   ShieldAlert,
   KeyRound,
 } from 'lucide-react';
@@ -293,20 +291,6 @@ export default function AgentWorkspace() {
 
         <div className="pp-scroll flex-1 overflow-y-auto">
           <div className="space-y-5 px-4 py-5">
-            {empty && (
-              <div className="flex gap-3">
-                <Avatar />
-                <div className="min-w-0">
-                  <NameRow />
-                  <p className="mt-1 text-sm leading-relaxed text-ink-secondary">
-                    Salom! Men ParkPulse DevOps agentiman — konteynerlarni tekshiraman, loglarni o‘qiyman,
-                    config tuzataman va xizmatlarni qayta ishga tushiraman. Xavfli amallar sizdan tasdiq so‘raydi.
-                    Bugun nimani ko‘ramiz?
-                  </p>
-                </div>
-              </div>
-            )}
-
             {chat.map((it, i) =>
               it.role === 'user' ? (
                 <div key={i} className="flex justify-end">
@@ -378,17 +362,6 @@ export default function AgentWorkspace() {
         {/* Kirish maydoni (composer) */}
         <div className="shrink-0 px-3 pb-3">
           <div className="rounded-2xl border border-line bg-page px-3 py-2.5 focus-within:border-accent/60">
-            <div className="mb-2 flex items-center gap-2">
-              <button
-                onClick={() => setSettingsOpen(true)}
-                className="flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[11px] text-ink-muted hover:text-ink-secondary"
-              >
-                <AtSign className="size-3" /> Kontekst
-              </button>
-              <span className="flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[11px] text-ink-muted">
-                <Terminal className="size-3" /> {config.model || 'model'}
-              </span>
-            </div>
             <textarea
               ref={taRef}
               value={input}
@@ -407,14 +380,12 @@ export default function AgentWorkspace() {
             <div className="mt-1.5 flex items-center gap-3">
               <button
                 onClick={() => setSettingsOpen(true)}
-                className="flex items-center gap-1 text-xs text-ink-secondary hover:text-ink"
+                className="text-ink-muted transition-colors hover:text-ink"
                 title="Provayder / modelni o‘zgartirish"
+                aria-label="Sozlamalar"
               >
-                <Sparkles className="size-3.5 text-accent" />
-                {config.model || 'model'}
-                <ChevronDown className="size-3 text-ink-muted" />
+                <Settings className="size-4" />
               </button>
-              <span className="text-xs text-ink-muted">Avto (xavfsiz)</span>
               <button
                 onClick={() => send(input)}
                 disabled={wsState !== 'open' || !input.trim()}

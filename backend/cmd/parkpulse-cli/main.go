@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"time"
@@ -177,6 +178,15 @@ func hint(errText string) string {
 	return ""
 }
 
+var pulseArt = []string{
+	` ██████╗ ██╗   ██╗██╗     ███████╗███████╗`,
+	` ██╔══██╗██║   ██║██║     ██╔════╝██╔════╝`,
+	` ██████╔╝██║   ██║██║     ███████╗█████╗  `,
+	` ██╔═══╝ ██║   ██║██║     ╚════██║██╔══╝  `,
+	` ██║     ╚██████╔╝███████╗███████║███████╗`,
+	` ╚═╝      ╚═════╝ ╚══════╝╚══════╝╚══════╝`,
+}
+
 func banner(st statusInfo) {
 	model := st.Model
 	if model == "" {
@@ -187,10 +197,11 @@ func banner(st statusInfo) {
 		prov = "—"
 	}
 	fmt.Println()
-	fmt.Println(cGreenB + "  ❯_ Pulse" + cReset + cDim + "   ParkPulse DevOps agenti" + cReset)
-	fmt.Println(cDim + "  ─────────────────────────────────────────────" + cReset)
-	fmt.Printf("  %sprovayder%s %s   %smodel%s %s\n", cDim, cReset, prov, cDim, cReset, model)
-	fmt.Println(cDim + "  Savol yozing. Xavfli buyruqlar tasdiq so'raydi. Chiqish: Ctrl+D" + cReset)
+	for _, l := range pulseArt {
+		fmt.Println(cGreenB + l + cReset)
+	}
+	fmt.Printf("\n %s❯_ ParkPulse DevOps agenti%s\n", cDim, cReset)
+	fmt.Printf(" %sprovayder%s %s   %smodel%s %s\n\n", cDim, cReset, prov, cDim, cReset, model)
 }
 
 func printTool(ev event) {
@@ -258,6 +269,16 @@ func main() {
 		os.Exit(1)
 	}
 	defer conn.Close()
+
+	// Ctrl+C — toza chiqish.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	go func() {
+		<-sig
+		stopSpin()
+		out("\n" + cDim + "xayr 👋" + cReset + "\n")
+		os.Exit(0)
+	}()
 
 	banner(st)
 

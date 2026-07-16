@@ -31,9 +31,21 @@ install_host_cli() {
 set -euo pipefail
 IMAGE_MATCH="parking-pulse"
 
-CID="$(docker ps --format '{{.ID}} {{.Image}}' | awk -v m="$IMAGE_MATCH" '$2 ~ m {print $1; exit}')"
+# docker'ga ruxsat: foydalanuvchi docker guruhida bo'lmasa sudo'ga o'tamiz —
+# shunda `pulse` sudosiz ham ishlaydi (kerak bo'lsa sudo bir marta parol so'raydi).
+if docker info >/dev/null 2>&1; then
+  DK="docker"
+elif command -v sudo >/dev/null 2>&1; then
+  DK="sudo docker"
+else
+  echo "docker'ga ruxsat yo'q. Foydalanuvchini docker guruhiga qo'shing:" >&2
+  echo "  sudo usermod -aG docker \$USER   (keyin qayta kiring)" >&2
+  exit 1
+fi
+
+CID="$($DK ps --format '{{.ID}} {{.Image}}' | awk -v m="$IMAGE_MATCH" '$2 ~ m {print $1; exit}')"
 if [ -z "${CID:-}" ]; then
-  CID="$(docker ps --format '{{.ID}} {{.Names}}' | awk '$2 ~ /pulse/ {print $1; exit}')"
+  CID="$($DK ps --format '{{.ID}} {{.Names}}' | awk '$2 ~ /pulse/ {print $1; exit}')"
 fi
 if [ -z "${CID:-}" ]; then
   echo "ParkPulse konteyneri ishlamayapti (docker ps bo'sh)." >&2
@@ -43,7 +55,7 @@ fi
 if [ -t 0 ] && [ -t 1 ]; then TTY="-it"; else TTY="-i"; fi
 PW_ARG=()
 if [ -n "${PULSE_PASSWORD:-}" ]; then PW_ARG=(-e "PULSE_PASSWORD=$PULSE_PASSWORD"); fi
-exec docker exec $TTY "${PW_ARG[@]}" "$CID" pulse-cli "$@"
+exec $DK exec $TTY "${PW_ARG[@]}" "$CID" pulse-cli "$@"
 WRAP
     chmod +x "$dir/$name"
   done
