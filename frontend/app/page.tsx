@@ -9,14 +9,13 @@ import Devices from '@/components/Devices';
 import SnmpPanel from '@/components/SnmpPanel';
 import AlertSettings from '@/components/AlertSettings';
 import ContainerPicker from '@/components/ContainerPicker';
-import LogInspector from '@/components/LogInspector';
 import AgentWorkspace from '@/components/AgentWorkspace';
 import Heartbeat from '@/components/Heartbeat';
 import { HealthPanel, ContainerTable } from '@/components/Health';
 
 const fmtMs = (ms: number) => `${ms < 10 ? ms.toFixed(1) : String(Math.round(ms))} ms`;
 
-type Section = 'dashboard' | 'devices' | 'network' | 'logs' | 'agent' | 'system';
+type Section = 'dashboard' | 'devices' | 'network' | 'agent' | 'system';
 type Panel = 'passes' | 'opens';
 
 type NavItem = { id: Section; label: string; icon: string };
@@ -24,7 +23,6 @@ type NavItem = { id: Section; label: string; icon: string };
 const NAV_HEAD: NavItem[] = [
   { id: 'dashboard', label: 'Boshqaruv', icon: '◈' },
   { id: 'devices', label: 'Qurilmalar', icon: '⌸' },
-  { id: 'logs', label: 'Loglar', icon: '≣' },
   { id: 'agent', label: 'Agent', icon: '✦' },
 ];
 const NAV_SYSTEM: NavItem = { id: 'system', label: 'Tizim', icon: '⚙' };
@@ -67,8 +65,6 @@ export default function Dashboard() {
         )}
 
         {section === 'devices' && <Devices devices={devices} />}
-
-        {section === 'logs' && <LogInspector />}
 
         {section === 'agent' && <AgentWorkspace />}
 

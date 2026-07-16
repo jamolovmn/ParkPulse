@@ -84,6 +84,7 @@ the single most common source of false ghost alerts.
 docker run -d --name parkpulse \
   -e TARGET_CONTAINER=p24gui \
   -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /usr/local/bin:/host/bin \
   --network host \
   ghcr.io/jamolovmn/parking-pulse:latest
 ```
@@ -96,7 +97,21 @@ Then open `http://localhost:8888`.
   (`TARGET_STORE`, default `target.json`) and applied without a restart.
 - The Docker socket mount lets ParkPulse list containers, tail logs, and read
   `docker stats`.
+- `-v /usr/local/bin:/host/bin` — on start the container drops two host
+  commands, **`pulse`** and **`parkpulse`**, so you can open the AI agent CLI
+  from the VPS just like `claude` (no manual install). Skip this mount and the
+  server still runs fine; you just won't get the host shortcuts. `PULSE_HOST_BIN`
+  overrides the in-container target path (default `/host/bin`).
 - `--network host` is what makes LAN device scanning and pinging work.
+
+Once running, from the host:
+
+```bash
+pulse                          # opens the interactive agent (like `claude`)
+PULSE_PASSWORD='parol' pulse   # if you set an agent password
+```
+
+No mount? Install the shortcuts manually instead: `sudo ./install-cli.sh`.
 
 ### Build it yourself
 
