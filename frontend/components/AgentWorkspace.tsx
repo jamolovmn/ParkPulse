@@ -10,6 +10,8 @@ import {
   Settings,
   ShieldAlert,
   KeyRound,
+  Square,
+  Plus,
 } from 'lucide-react';
 import AgentSettings, { PULSE_TOKEN } from '@/components/AgentSettings';
 
@@ -112,6 +114,15 @@ export default function AgentWorkspace() {
         const m = JSON.parse(e.data);
         switch (m.type) {
           case 'status':
+            if (m.state === 'reset') {
+              // Yangi sessiya — hamma narsani tozalaymiz.
+              setChat([]);
+              setTerm([]);
+              setLogs([]);
+              setConfirm(null);
+              setStatus('idle');
+              break;
+            }
             setStatus(m.state);
             if (m.state === 'error' && m.text) {
               setChat((c) => [...c, { role: 'agent', text: `⚠️ ${m.text}`, time: now() }]);
@@ -174,6 +185,11 @@ export default function AgentWorkspace() {
     setChat((c) => [...c, { role: 'user', text: t, time: now() }]);
     ws.current.send(JSON.stringify({ type: 'chat', text: t }));
     setInput('');
+  };
+
+  // stop — joriy vazifani to'xtatadi; new — sessiyani tozalaydi (server hal qiladi).
+  const control = (type: 'stop' | 'new') => {
+    ws.current?.send(JSON.stringify({ type }));
   };
 
   const decide = (approve: boolean) => {
@@ -278,6 +294,22 @@ export default function AgentWorkspace() {
             <span className={`size-1.5 rounded-full ${dot}`} />
             {stateLabel}
           </span>
+          {busy && (
+            <button
+              onClick={() => control('stop')}
+              title="Joriy vazifani to‘xtatish"
+              className="flex items-center gap-1 rounded-lg border border-line px-2 py-1 text-xs text-warn hover:bg-white/[0.04]"
+            >
+              <Square className="size-3" /> To‘xtat
+            </button>
+          )}
+          <button
+            onClick={() => control('new')}
+            title="Yangi sessiya — tarixni tozalaydi"
+            className="flex items-center gap-1 rounded-lg border border-line px-2 py-1 text-xs text-ink-secondary hover:bg-white/[0.04]"
+          >
+            <Plus className="size-3.5" /> Yangi
+          </button>
           {!termOpen && (
             <button
               onClick={() => setTermOpen(true)}

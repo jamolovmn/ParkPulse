@@ -56,6 +56,7 @@ type Hub struct {
 	pending map[string]chan bool
 	hist    []turn
 	busy    bool
+	cancel  context.CancelFunc // ishlayotgan vazifani bekor qilish uchun
 }
 
 func NewHub(mgr *Manager) *Hub {
@@ -93,12 +94,48 @@ func (h *Hub) Chat(text string) {
 	}
 	h.busy = true
 	h.hist = append(h.hist, turn{role: "user", text: text})
+	ctx, cancel := context.WithCancel(context.Background())
+	h.cancel = cancel
 	h.mu.Unlock()
 
 	go func() {
-		defer func() { h.mu.Lock(); h.busy = false; h.mu.Unlock() }()
-		h.run(context.Background())
+		defer func() {
+			h.mu.Lock()
+			h.busy = false
+			h.cancel = nil
+			h.mu.Unlock()
+			cancel()
+		}()
+		h.run(ctx)
 	}()
+}
+
+// Stop ishlayotgan vazifani bekor qiladi (tarix saqlanadi). Kutayotgan tasdiqlar
+// ham rad etilgan deb yopiladi. CLI/Web'dagi Ctrl+C yoki "stop" shu yerga keladi.
+func (h *Hub) Stop() {
+	h.mu.Lock()
+	c := h.cancel
+	for _, ch := range h.pending {
+		select {
+		case ch <- false:
+		default:
+		}
+	}
+	h.mu.Unlock()
+	if c != nil {
+		c()
+	}
+	h.emit(Event{Type: "status", State: "idle"})
+}
+
+// Reset sessiyani butunlay tozalaydi: vazifani to'xtatadi va suhbat tarixini
+// o'chiradi — keyingi so'rov toza kontekstdan boshlanadi.
+func (h *Hub) Reset() {
+	h.Stop()
+	h.mu.Lock()
+	h.hist = nil
+	h.mu.Unlock()
+	h.emit(Event{Type: "status", State: "reset"})
 }
 
 // Decide tasdiq javobini kutayotgan tool'ga uzatadi (CLI yoki Web'dan).
@@ -116,9 +153,17 @@ func (h *Hub) Decide(id string, approve bool) {
 
 func (h *Hub) run(ctx context.Context) {
 	for step := 0; step < maxSteps; step++ {
+		if ctx.Err() != nil { // to'xtatildi
+			h.emit(Event{Type: "status", State: "idle"})
+			return
+		}
 		h.emit(Event{Type: "status", State: "thinking"})
 		text, calls, err := h.mgr.complete(ctx, systemPrompt, h.snapshotHist(), h.reg.Specs())
 		if err != nil {
+			if ctx.Err() != nil { // xato emas — foydalanuvchi to'xtatdi
+				h.emit(Event{Type: "status", State: "idle"})
+				return
+			}
 			h.emit(Event{Type: "status", State: "error", Text: err.Error()})
 			return
 		}
@@ -135,11 +180,15 @@ func (h *Hub) run(ctx context.Context) {
 		}
 
 		for _, c := range calls {
+			if ctx.Err() != nil {
+				h.emit(Event{Type: "status", State: "idle"})
+				return
+			}
 			arg := guardArg(c.name, c.args)
 			h.emit(Event{Type: "tool", State: "running", ID: c.id, Name: c.name, Input: arg})
 
 			if dstr, reason := destructive(c.name, arg); dstr {
-				if !h.confirm(c.id, describe(c.name, arg), reason) {
+				if !h.confirm(ctx, c.id, describe(c.name, arg), reason) {
 					h.appendTool(c.id, "foydalanuvchi rad etdi")
 					h.emit(Event{Type: "tool", State: "done", ID: c.id, Name: c.name, Output: "rad etildi", Exit: 1})
 					continue
@@ -174,7 +223,7 @@ func (h *Hub) appendTool(id, text string) {
 }
 
 // confirm xavfli tool uchun Y/N so'raydi va CLI/Web javobini kutadi.
-func (h *Hub) confirm(id, command, reason string) bool {
+func (h *Hub) confirm(ctx context.Context, id, command, reason string) bool {
 	ch := make(chan bool, 1)
 	h.mu.Lock()
 	h.pending[id] = ch
@@ -185,6 +234,8 @@ func (h *Hub) confirm(id, command, reason string) bool {
 	select {
 	case ok := <-ch:
 		return ok
+	case <-ctx.Done(): // to'xtatildi
+		return false
 	case <-time.After(confirmExpiry):
 		return false
 	}
@@ -247,6 +298,10 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 			h.Chat(msg.Text)
 		case "decision":
 			h.Decide(msg.ID, msg.Approve)
+		case "stop":
+			h.Stop()
+		case "new", "reset":
+			h.Reset()
 		}
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -201,7 +202,8 @@ func banner(st statusInfo) {
 		fmt.Println(cGreenB + l + cReset)
 	}
 	fmt.Printf("\n %s❯_ ParkPulse DevOps agenti%s\n", cDim, cReset)
-	fmt.Printf(" %sprovayder%s %s   %smodel%s %s\n\n", cDim, cReset, prov, cDim, cReset, model)
+	fmt.Printf(" %sprovayder%s %s   %smodel%s %s\n", cDim, cReset, prov, cDim, cReset, model)
+	fmt.Printf(" %s/new yangi sessiya · /stop to'xtatish · Ctrl+C to'xtatish/chiqish%s\n\n", cDim, cReset)
 }
 
 func printTool(ev event) {
@@ -270,21 +272,39 @@ func main() {
 	}
 	defer conn.Close()
 
-	// Ctrl+C — toza chiqish.
+	// Yagona yozuvchi — gorilla WS bir vaqtda bitta yozuvchini talab qiladi.
+	var wmu sync.Mutex
+	send := func(v any) {
+		wmu.Lock()
+		conn.WriteJSON(v)
+		wmu.Unlock()
+	}
+
+	var running atomic.Bool // serverda vazifa ketyaptimi (interrupt uchun)
+
+	// Ctrl+C — vazifa ketayotgan bo'lsa TO'XTATADI (claude kabi); bo'sh bo'lsa
+	// yoki 2s ichida qayta bosilsa — chiqadi.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
 	go func() {
-		<-sig
-		stopSpin()
-		out("\n" + cDim + "xayr 👋" + cReset + "\n")
-		os.Exit(0)
+		var last time.Time
+		for range sig {
+			if running.Load() && time.Since(last) > 2*time.Second {
+				send(map[string]any{"type": "stop"})
+				out("\n" + cYellow + "■ to'xtatildi" + cReset + cDim + "  (yana Ctrl+C — chiqish · /new — yangi sessiya)" + cReset + "\n")
+				last = time.Now()
+			} else {
+				stopSpin()
+				out("\n" + cDim + "xayr 👋" + cReset + "\n")
+				os.Exit(0)
+			}
+		}
 	}()
 
 	banner(st)
 
 	var mu sync.Mutex
 	pending := "" // kutilayotgan tasdiq id'si
-	active := false
 
 	go func() {
 		for {
@@ -314,7 +334,7 @@ func main() {
 			case "status":
 				switch ev.State {
 				case "thinking":
-					active = true
+					running.Store(true)
 					startSpin("o'ylayapti…")
 				case "error":
 					stopSpin()
@@ -323,19 +343,24 @@ func main() {
 						msg += "\n" + cDim + "   → " + h + cReset
 					}
 					out(fmt.Sprintf("\n%s✗ xato:%s %s\n", cRed, cReset, msg))
-					if active {
-						active = false
-						prompt()
-					}
+					running.Store(false)
+					prompt()
 				case "idle":
 					stopSpin()
-					if active {
-						active = false
+					if running.Swap(false) {
 						prompt()
 					}
+				case "reset":
+					stopSpin()
+					running.Store(false)
+					mu.Lock()
+					pending = ""
+					mu.Unlock()
+					out("\n" + cGreen + "✎ yangi sessiya — tarix tozalandi" + cReset + "\n")
+					prompt()
 				case "busy":
 					stopSpin()
-					out("\n" + cDim + "· avvalgi so'rov tugashini kuting…" + cReset + "\n")
+					out("\n" + cDim + "· avvalgi so'rov tugashini kuting (yoki /stop)" + cReset + "\n")
 				}
 			}
 		}
@@ -346,12 +371,30 @@ func main() {
 	prompt()
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
+
+		// Slash buyruqlar
+		switch line {
+		case "/new", "/reset", "/clear":
+			pending = ""
+			send(map[string]any{"type": "new"})
+			continue
+		case "/stop":
+			send(map[string]any{"type": "stop"})
+			continue
+		case "/help", "/?":
+			out(cDim + "\n  /new    yangi sessiya (tarixni tozalaydi)\n" +
+				"  /stop   joriy vazifani to'xtatish (Ctrl+C ham)\n" +
+				"  Ctrl+C  to'xtatish · yana bosilsa chiqish\n" + cReset)
+			prompt()
+			continue
+		}
+
 		mu.Lock()
 		id := pending
 		mu.Unlock()
 		if id != "" { // tasdiq javobi
 			approve := line == "y" || line == "Y" || line == "yes" || line == "ha"
-			conn.WriteJSON(map[string]any{"type": "decision", "id": id, "approve": approve})
+			send(map[string]any{"type": "decision", "id": id, "approve": approve})
 			mu.Lock()
 			pending = ""
 			mu.Unlock()
@@ -359,7 +402,7 @@ func main() {
 				out(cDim + "· rad etildi" + cReset + "\n")
 			}
 		} else if line != "" {
-			conn.WriteJSON(map[string]any{"type": "chat", "text": line})
+			send(map[string]any{"type": "chat", "text": line})
 		} else {
 			prompt()
 		}
