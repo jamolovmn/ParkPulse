@@ -3,6 +3,7 @@ module parkpulse/backend
 go 1.25.0
 
 require (
+	github.com/chzyer/readline v1.5.1
 	github.com/docker/docker v27.4.1+incompatible
 	github.com/gorilla/websocket v1.5.3
 	github.com/gosnmp/gosnmp v1.43.2

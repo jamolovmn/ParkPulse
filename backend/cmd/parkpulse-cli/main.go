@@ -12,14 +12,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
-	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/chzyer/readline"
 	"github.com/gorilla/websocket"
 )
 
@@ -33,8 +34,9 @@ const (
 	cYellow = "\033[33m"
 	cRed    = "\033[31m"
 	cBold   = "\033[1m"
-	clr     = "\r\033[K" // qatorni tozalash
 )
+
+const basePrompt = "\033[1;32m❯\033[0m "
 
 type statusInfo struct {
 	Auth     bool   `json:"auth"`
@@ -101,66 +103,53 @@ type event struct {
 	Reason  string `json:"reason"`
 }
 
-// ---- Spinner (o'ylayapti/bajarilyapti indikatori) ----
-var (
-	outMu   sync.Mutex // stdout'ni serializatsiya qiladi
-	spStop  chan struct{}
-	spDone  chan struct{}
-	spOn    bool
-	spMu    sync.Mutex
-	spFrame = []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-)
+// ---- Spinner: readline prompt'ini animatsiya qiladi (satr tahririga xalaqit bermaydi) ----
+type spinner struct {
+	rl   *readline.Instance
+	mu   sync.Mutex
+	stop chan struct{}
+	on   bool
+}
 
-func startSpin(label string) {
-	spMu.Lock()
-	defer spMu.Unlock()
-	if spOn {
-		return
+var spFrame = []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+
+func (s *spinner) begin(label string) {
+	s.mu.Lock()
+	if s.on {
+		close(s.stop)
+		s.on = false
 	}
-	spOn = true
-	spStop = make(chan struct{})
-	spDone = make(chan struct{})
-	go func(stop, done chan struct{}) {
+	s.on = true
+	s.stop = make(chan struct{})
+	stop := s.stop
+	s.mu.Unlock()
+	go func() {
 		t := time.NewTicker(90 * time.Millisecond)
 		defer t.Stop()
 		i := 0
 		for {
 			select {
 			case <-stop:
-				outMu.Lock()
-				fmt.Print(clr)
-				outMu.Unlock()
-				close(done)
 				return
 			case <-t.C:
-				outMu.Lock()
-				fmt.Printf("\r%s%c %s%s", cDim, spFrame[i%len(spFrame)], label, cReset)
-				outMu.Unlock()
+				s.rl.SetPrompt(fmt.Sprintf("%c %s ", spFrame[i%len(spFrame)], label))
+				s.rl.Refresh()
 				i++
 			}
 		}
-	}(spStop, spDone)
+	}()
 }
 
-func stopSpin() {
-	spMu.Lock()
-	on := spOn
-	stop, done := spStop, spDone
-	spOn = false
-	spMu.Unlock()
-	if on {
-		close(stop)
-		<-done // qator tozalanguncha kutamiz
+func (s *spinner) end() {
+	s.mu.Lock()
+	if s.on {
+		close(s.stop)
+		s.on = false
 	}
+	s.mu.Unlock()
+	s.rl.SetPrompt(basePrompt)
+	s.rl.Refresh()
 }
-
-func out(s string) {
-	outMu.Lock()
-	fmt.Print(s)
-	outMu.Unlock()
-}
-
-func prompt() { out("\n" + cGreenB + "❯ " + cReset) }
 
 // hint — tarmoq/timeout xatolariga foydali maslahat qo'shadi.
 func hint(errText string) string {
@@ -206,13 +195,12 @@ func banner(st statusInfo) {
 	fmt.Printf(" %s/new yangi sessiya · /stop to'xtatish · Ctrl+C to'xtatish/chiqish%s\n\n", cDim, cReset)
 }
 
-func printTool(ev event) {
+func printTool(w io.Writer, ev event) {
 	if ev.State == "running" {
 		arg := strings.TrimSpace(ev.Input)
-		out(fmt.Sprintf("\n%s⏺%s %s%s%s %s%s%s\n", cGreen, cReset, cBold, ev.Name, cReset, cDim, arg, cReset))
+		fmt.Fprintf(w, "\n%s⏺%s %s%s%s %s%s%s\n", cGreen, cReset, cBold, ev.Name, cReset, cDim, arg, cReset)
 		return
 	}
-	// done — chiqishni ⎿ bilan chekilgan holda ko'rsatamiz (claude uslubi)
 	body := strings.TrimRight(ev.Output, "\n")
 	col := cDim
 	if ev.Exit != 0 {
@@ -225,18 +213,16 @@ func printTool(ev event) {
 		lines = lines[:maxLines]
 		clipped = true
 	}
-	var b strings.Builder
 	for i, ln := range lines {
 		pre := "   "
 		if i == 0 {
 			pre = " ⎿ "
 		}
-		b.WriteString(fmt.Sprintf("%s%s%s%s\n", col, pre, ln, cReset))
+		fmt.Fprintf(w, "%s%s%s%s\n", col, pre, ln, cReset)
 	}
 	if clipped {
-		b.WriteString(fmt.Sprintf("%s   … (chiqish qisqartirildi)%s\n", cDim, cReset))
+		fmt.Fprintf(w, "%s   … (chiqish qisqartirildi)%s\n", cDim, cReset)
 	}
-	out(b.String())
 }
 
 func main() {
@@ -272,7 +258,24 @@ func main() {
 	}
 	defer conn.Close()
 
-	// Yagona yozuvchi — gorilla WS bir vaqtda bitta yozuvchini talab qiladi.
+	banner(st)
+
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:            basePrompt,
+		HistoryLimit:      300,
+		InterruptPrompt:   "^C",
+		EOFPrompt:         "",
+		HistorySearchFold: true,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "terminal xatosi: %v\n", err)
+		os.Exit(1)
+	}
+	defer rl.Close()
+	w := rl.Stdout() // async chiqish shu yerga — prompt avtomatik qayta chiziladi
+	sp := &spinner{rl: rl}
+
+	// Yagona yozuvchi (gorilla WS bitta yozuvchi talab qiladi).
 	var wmu sync.Mutex
 	send := func(v any) {
 		wmu.Lock()
@@ -280,29 +283,7 @@ func main() {
 		wmu.Unlock()
 	}
 
-	var running atomic.Bool // serverda vazifa ketyaptimi (interrupt uchun)
-
-	// Ctrl+C — vazifa ketayotgan bo'lsa TO'XTATADI (claude kabi); bo'sh bo'lsa
-	// yoki 2s ichida qayta bosilsa — chiqadi.
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt)
-	go func() {
-		var last time.Time
-		for range sig {
-			if running.Load() && time.Since(last) > 2*time.Second {
-				send(map[string]any{"type": "stop"})
-				out("\n" + cYellow + "■ to'xtatildi" + cReset + cDim + "  (yana Ctrl+C — chiqish · /new — yangi sessiya)" + cReset + "\n")
-				last = time.Now()
-			} else {
-				stopSpin()
-				out("\n" + cDim + "xayr 👋" + cReset + "\n")
-				os.Exit(0)
-			}
-		}
-	}()
-
-	banner(st)
-
+	var running atomic.Bool // serverda vazifa ketyaptimi
 	var mu sync.Mutex
 	pending := "" // kutilayotgan tasdiq id'si
 
@@ -310,82 +291,91 @@ func main() {
 		for {
 			var ev event
 			if err := conn.ReadJSON(&ev); err != nil {
-				stopSpin()
-				out("\n" + cDim + "[ulanish uzildi]" + cReset + "\n")
+				sp.end()
+				fmt.Fprint(w, "\n"+cDim+"[ulanish uzildi]"+cReset+"\n")
+				rl.Close()
 				os.Exit(0)
 			}
 			switch ev.Type {
 			case "assistant":
-				stopSpin()
-				out("\n" + ev.Text + "\n")
+				sp.end()
+				fmt.Fprint(w, "\n"+ev.Text+"\n")
 			case "tool":
-				stopSpin()
-				printTool(ev)
+				sp.end()
+				printTool(w, ev)
 				if ev.State == "running" {
-					startSpin(ev.Name + " bajarilyapti…")
+					sp.begin(ev.Name + " bajarilyapti…")
 				}
 			case "confirm":
-				stopSpin()
+				sp.end()
 				mu.Lock()
 				pending = ev.ID
 				mu.Unlock()
-				out(fmt.Sprintf("\n%s⚠  Xavfli buyruq:%s %s\n%s   sabab: %s%s\n%s   Bajarilsinmi? [y/N]:%s ",
-					cYellow, cReset, ev.Command, cDim, ev.Reason, cReset, cBold, cReset))
+				fmt.Fprintf(w, "\n%s⚠  Xavfli buyruq:%s %s\n%s   sabab: %s%s\n",
+					cYellow, cReset, ev.Command, cDim, ev.Reason, cReset)
+				rl.SetPrompt(cYellow + "bajarilsinmi? [y/N]" + cReset + " ")
+				rl.Refresh()
 			case "status":
 				switch ev.State {
 				case "thinking":
 					running.Store(true)
-					startSpin("o'ylayapti…")
+					sp.begin("o'ylayapti…")
 				case "error":
-					stopSpin()
+					sp.end()
 					msg := ev.Text
 					if h := hint(msg); h != "" {
 						msg += "\n" + cDim + "   → " + h + cReset
 					}
-					out(fmt.Sprintf("\n%s✗ xato:%s %s\n", cRed, cReset, msg))
+					fmt.Fprintf(w, "\n%s✗ xato:%s %s\n", cRed, cReset, msg)
 					running.Store(false)
-					prompt()
 				case "idle":
-					stopSpin()
-					if running.Swap(false) {
-						prompt()
-					}
+					sp.end()
+					running.Store(false)
 				case "reset":
-					stopSpin()
+					sp.end()
 					running.Store(false)
 					mu.Lock()
 					pending = ""
 					mu.Unlock()
-					out("\n" + cGreen + "✎ yangi sessiya — tarix tozalandi" + cReset + "\n")
-					prompt()
+					rl.SetPrompt(basePrompt)
+					fmt.Fprint(w, "\n"+cGreen+"✎ yangi sessiya — tarix tozalandi"+cReset+"\n")
 				case "busy":
-					stopSpin()
-					out("\n" + cDim + "· avvalgi so'rov tugashini kuting (yoki /stop)" + cReset + "\n")
+					sp.end()
+					fmt.Fprint(w, "\n"+cDim+"· avvalgi so'rov tugashini kuting (yoki /stop)"+cReset+"\n")
 				}
 			}
 		}
 	}()
 
-	sc := bufio.NewScanner(os.Stdin)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024) // uzun so'rovlar uchun
-	prompt()
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
+	for {
+		line, err := rl.Readline()
+		if err == readline.ErrInterrupt { // Ctrl+C
+			if running.Load() {
+				send(map[string]any{"type": "stop"})
+				fmt.Fprint(w, cYellow+"■ to'xtatildi"+cReset+cDim+"  (yana Ctrl+C — chiqish · /new — yangi sessiya)"+cReset+"\n")
+				continue
+			}
+			break
+		} else if err == io.EOF { // Ctrl+D
+			break
+		}
+		line = strings.TrimSpace(line)
 
-		// Slash buyruqlar
 		switch line {
 		case "/new", "/reset", "/clear":
+			mu.Lock()
 			pending = ""
+			mu.Unlock()
+			rl.SetPrompt(basePrompt)
 			send(map[string]any{"type": "new"})
 			continue
 		case "/stop":
 			send(map[string]any{"type": "stop"})
 			continue
 		case "/help", "/?":
-			out(cDim + "\n  /new    yangi sessiya (tarixni tozalaydi)\n" +
-				"  /stop   joriy vazifani to'xtatish (Ctrl+C ham)\n" +
-				"  Ctrl+C  to'xtatish · yana bosilsa chiqish\n" + cReset)
-			prompt()
+			fmt.Fprint(w, cDim+"\n  /new    yangi sessiya (tarixni tozalaydi)\n"+
+				"  /stop   joriy vazifani to'xtatish (Ctrl+C ham)\n"+
+				"  Ctrl+C  to'xtatish · yana bosilsa chiqish\n"+cReset)
 			continue
 		}
 
@@ -398,16 +388,17 @@ func main() {
 			mu.Lock()
 			pending = ""
 			mu.Unlock()
+			rl.SetPrompt(basePrompt)
 			if !approve {
-				out(cDim + "· rad etildi" + cReset + "\n")
+				fmt.Fprint(w, cDim+"· rad etildi"+cReset+"\n")
 			}
-		} else if line != "" {
+			continue
+		}
+		if line != "" {
 			send(map[string]any{"type": "chat", "text": line})
-		} else {
-			prompt()
 		}
 	}
-	// Ctrl+D
-	stopSpin()
-	out("\n" + cDim + "xayr 👋" + cReset + "\n")
+
+	sp.end()
+	fmt.Fprint(w, "\n"+cDim+"xayr 👋"+cReset+"\n")
 }
