@@ -56,7 +56,8 @@ type Settings struct {
 	APIKey   string   `json:"api_key"`
 	Model    string   `json:"model"`
 	BaseURL  string   `json:"base_url,omitempty"`
-	Password string   `json:"password,omitempty"` // bo'sh = o'zgartirmaydi
+	Password string   `json:"password,omitempty"`      // bo'sh = o'zgartirmaydi
+	SudoPass string   `json:"sudo_password,omitempty"` // agent sudo buyruqlari uchun; bo'sh = o'zgartirmaydi
 }
 
 // stored — diskdagi ko'rinish (sirlar hex'da).
@@ -68,6 +69,7 @@ type stored struct {
 	PassHash   string   `json:"pass_hash,omitempty"`
 	Salt       string   `json:"salt,omitempty"`
 	AuthSecret string   `json:"auth_secret,omitempty"`
+	SudoPass   string   `json:"sudo_pass,omitempty"` // sudo paroli (ishlatiladi, shuning uchun ochiq — fayl 0600)
 }
 
 // Status — UI uchun xavfsiz holat (kalit/parol maskalangan).
@@ -78,7 +80,8 @@ type Status struct {
 	BaseURL  string   `json:"base_url"`
 	KeySet   bool     `json:"key_set"`
 	KeyHint  string   `json:"key_hint,omitempty"`
-	Auth     bool     `json:"auth"` // parol o'rnatilganmi
+	Auth     bool     `json:"auth"`     // parol o'rnatilganmi
+	SudoSet  bool     `json:"sudo_set"` // sudo paroli o'rnatilganmi
 }
 
 type Manager struct {
@@ -91,9 +94,17 @@ type Manager struct {
 	passHash   []byte
 	salt       []byte
 	authSecret []byte
+	sudoPass   string // agent bash tool'i sudo uchun ishlatadi
 
 	store  string
 	client *http.Client
+}
+
+// SudoPassword — bash tool'i sudo uchun ishlatadigan parol (bo'sh = yo'q).
+func (m *Manager) SudoPassword() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sudoPass
 }
 
 func New() *Manager {
@@ -124,6 +135,7 @@ func New() *Manager {
 	if pw := strings.TrimSpace(os.Getenv("AGENT_PASSWORD")); pw != "" {
 		m.setPassword(pw)
 	}
+	m.sudoPass = os.Getenv("AGENT_SUDO_PASSWORD")
 	return m
 }
 
@@ -142,6 +154,7 @@ func (m *Manager) LoadStore() {
 		m.provider = s.Provider
 	}
 	m.apiKey, m.model, m.baseURL = s.APIKey, s.Model, s.BaseURL
+	m.sudoPass = s.SudoPass
 	m.passHash, _ = hex.DecodeString(s.PassHash)
 	m.salt, _ = hex.DecodeString(s.Salt)
 	m.authSecret, _ = hex.DecodeString(s.AuthSecret)
@@ -181,6 +194,7 @@ func (m *Manager) Status() Status {
 	st := Status{
 		Enabled: m.Enabled(), Provider: m.provider, Model: m.model,
 		BaseURL: m.baseURL, KeySet: m.apiKey != "", Auth: len(m.passHash) > 0,
+		SudoSet: m.sudoPass != "",
 	}
 	if n := len(m.apiKey); n >= 4 {
 		st.KeyHint = "…" + m.apiKey[n-4:]
@@ -215,10 +229,13 @@ func (m *Manager) SetConfig(s Settings) error {
 	if strings.TrimSpace(s.Password) != "" {
 		m.setPassword(strings.TrimSpace(s.Password))
 	}
+	if s.SudoPass != "" {
+		m.sudoPass = s.SudoPass
+	}
 	snap := stored{
 		Provider: m.provider, APIKey: m.apiKey, Model: m.model, BaseURL: m.baseURL,
 		PassHash: hex.EncodeToString(m.passHash), Salt: hex.EncodeToString(m.salt),
-		AuthSecret: hex.EncodeToString(m.authSecret),
+		AuthSecret: hex.EncodeToString(m.authSecret), SudoPass: m.sudoPass,
 	}
 	m.mu.Unlock()
 

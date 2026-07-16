@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -35,10 +36,10 @@ type Registry struct {
 	order  []string
 }
 
-func NewRegistry() *Registry {
+func NewRegistry(mgr *Manager) *Registry {
 	cli, _ := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	r := &Registry{docker: cli, tools: map[string]*Tool{}}
-	r.register(bashTool())
+	r.register(bashTool(mgr))
 	r.register(readFileTool())
 	r.register(writeFileTool())
 	r.register(dockerPsTool(cli))
@@ -81,13 +82,30 @@ func (r *Registry) Run(ctx context.Context, name string, in map[string]any) (str
 	return clip(out), err
 }
 
-func bashTool() *Tool {
+var reSudo = regexp.MustCompile(`\bsudo\b`)
+
+func bashTool(mgr *Manager) *Tool {
 	return &Tool{
 		Name:        "bash",
-		Description: "Bash buyrug'ini bajaradi (sh -c). stdout+stderr qaytaradi. Xavfli buyruqlar tasdiq so'raydi.",
+		Description: "Bash buyrug'ini bajaradi (sh -c). stdout+stderr qaytaradi. Sudo paroli sozlangan bo'lsa sudo buyruqlar parolsiz ishlaydi. Xavfli buyruqlar tasdiq so'raydi.",
 		Schema:      obj(props{"command": strProp("Bajariladigan bash buyrug'i")}, "command"),
 		Run: func(ctx context.Context, in map[string]any) (string, error) {
-			cmd := exec.CommandContext(ctx, "sh", "-c", str(in["command"]))
+			command := str(in["command"])
+			env := os.Environ()
+
+			// Sudo paroli sozlangan bo'lsa: askpass yordamchisi orqali sudo'ni
+			// interaktivsiz (parolsiz) ishlatamiz. `sudo` -> `sudo -A` ga o'giriladi.
+			if pw := mgr.SudoPassword(); pw != "" && reSudo.MatchString(command) {
+				askpass, cleanup, err := writeAskpass(pw)
+				if err == nil {
+					defer cleanup()
+					env = append(env, "SUDO_ASKPASS="+askpass)
+					command = reSudo.ReplaceAllString(command, "sudo -A")
+				}
+			}
+
+			cmd := exec.CommandContext(ctx, "sh", "-c", command)
+			cmd.Env = env
 			out, err := cmd.CombinedOutput()
 			s := string(out)
 			if err != nil {
@@ -99,6 +117,21 @@ func bashTool() *Tool {
 			return s, nil
 		},
 	}
+}
+
+// writeAskpass parolni chiqaradigan vaqtinchalik skript yozadi (0700). sudo -A
+// shu skriptni chaqirib parolni oladi — parol buyruq satrida ko'rinmaydi.
+func writeAskpass(pw string) (string, func(), error) {
+	f, err := os.CreateTemp("", "pp-askpass-*.sh")
+	if err != nil {
+		return "", func() {}, err
+	}
+	// Parol single-quote ichida; ichidagi ' -> '\'' bo'lib qochiriladi.
+	esc := strings.ReplaceAll(pw, "'", `'\''`)
+	fmt.Fprintf(f, "#!/bin/sh\nprintf '%%s\\n' '%s'\n", esc)
+	f.Close()
+	os.Chmod(f.Name(), 0o700)
+	return f.Name(), func() { os.Remove(f.Name()) }, nil
 }
 
 func readFileTool() *Tool {

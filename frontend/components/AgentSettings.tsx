@@ -11,6 +11,7 @@ type Status = {
   key_set: boolean;
   key_hint?: string;
   auth: boolean;
+  sudo_set?: boolean;
 };
 
 const PROVIDERS: { id: Provider; label: string; keyLabel: string }[] = [
@@ -33,6 +34,7 @@ export default function AgentSettings({ onSaved }: { onSaved?: (s: Status) => vo
   const [model, setModel] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [password, setPassword] = useState('');
+  const [sudoPass, setSudoPass] = useState('');
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -82,6 +84,7 @@ export default function AgentSettings({ onSaved }: { onSaved?: (s: Status) => vo
           base_url: baseUrl,
           ...(apiKey ? { api_key: apiKey } : {}),
           ...(password ? { password } : {}),
+          ...(sudoPass ? { sudo_password: sudoPass } : {}),
         }),
       });
       if (r.status === 401) throw new Error('parol kerak — Agent bo‘limida kiring');
@@ -90,6 +93,7 @@ export default function AgentSettings({ onSaved }: { onSaved?: (s: Status) => vo
       setStatus(s);
       setApiKey('');
       setPassword('');
+      setSudoPass('');
       setMsg({ ok: true, text: 'Saqlandi' });
       onSaved?.(s);
       if (s.key_set) fetchModels(); // kalit saqlangach modellar avto ro'yxati
@@ -225,6 +229,25 @@ export default function AgentSettings({ onSaved }: { onSaved?: (s: Status) => vo
               </span>
             </label>
           </div>
+
+          <label className="block space-y-1.5 rounded-lg border border-warn/30 bg-warn/[0.05] p-3">
+            <span className="text-xs font-medium text-ink-secondary">
+              Sudo paroli {status?.sudo_set && <span className="text-good">(o‘rnatilgan)</span>}
+            </span>
+            <input
+              type="password"
+              className={field}
+              placeholder={status?.sudo_set ? 'o‘zgartirish uchun yangisini' : 'agent sudo buyruqlar uchun (ixtiyoriy)'}
+              value={sudoPass}
+              onChange={(e) => setSudoPass(e.target.value)}
+              autoComplete="new-password"
+            />
+            <span className="block text-[11px] text-ink-muted">
+              ⚠ O‘rnatilsa, agent <b>root huquqli</b> (sudo) buyruqlarni o‘zi bajara oladi — parol
+              so‘ralmaydi. Xavfli buyruqlar baribir tasdiq so‘raydi. Parol serverda saqlanadi,
+              UI’ga qaytarilmaydi. Faqat o‘z serveringizda ishoning.
+            </span>
+          </label>
 
           <div className="flex flex-wrap items-center gap-3">
             <button

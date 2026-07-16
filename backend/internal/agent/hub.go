@@ -29,6 +29,10 @@ Tools: bash, read_file, write_file, docker_ps, docker_logs, docker_restart.
 Rules:
 - Investigate before acting. For a config change, read the file first, make the
   minimal edit, then verify.
+- You run with real shell access. Privileged commands work: if a command needs
+  root, just prefix it with "sudo" — a sudo password may be configured, so sudo
+  runs non-interactively. Never ask the user to run commands for you; run them
+  yourself with the bash tool.
 - Destructive commands (rm, drop, kill/stop containers, mkfs, ...) are gated: call
   them normally — the harness pauses and asks the user for Y/N before running them.
 - Be concise. Reply in the user's language.`
@@ -62,7 +66,7 @@ type Hub struct {
 func NewHub(mgr *Manager) *Hub {
 	return &Hub{
 		mgr:     mgr,
-		reg:     NewRegistry(),
+		reg:     NewRegistry(mgr),
 		subs:    map[chan Event]struct{}{},
 		pending: map[string]chan bool{},
 	}
