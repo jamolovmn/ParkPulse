@@ -23,6 +23,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -100,13 +101,22 @@ func New() *Manager {
 	if store == "" {
 		store = "agent.json"
 	}
+	// So'rov timeouti — sekin/reasoning modellar uchun AGENT_TIMEOUT_SEC bilan
+	// oshirish mumkin (standart 180s). Provayder umuman javob bermasa (tarmoq
+	// yoki bloklangan bo'lsa) baribir shu vaqtdan keyin "deadline exceeded" beradi.
+	timeout := 180 * time.Second
+	if v := strings.TrimSpace(os.Getenv("AGENT_TIMEOUT_SEC")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			timeout = time.Duration(n) * time.Second
+		}
+	}
 	m := &Manager{
 		provider: Provider(strings.TrimSpace(os.Getenv("AGENT_PROVIDER"))),
 		apiKey:   strings.TrimSpace(os.Getenv("AGENT_API_KEY")),
 		model:    strings.TrimSpace(os.Getenv("AGENT_MODEL")),
 		baseURL:  strings.TrimSpace(os.Getenv("AGENT_BASE_URL")),
 		store:    store,
-		client:   &http.Client{Timeout: 180 * time.Second},
+		client:   &http.Client{Timeout: timeout},
 	}
 	if m.provider == "" {
 		m.provider = ProviderAnthropic
