@@ -3,6 +3,14 @@
 **Real-time monitoring for barrier-gate parking systems.**
 🇺🇿 O'zbekcha to'liq hujjat: [**README.uz.md**](README.uz.md)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](backend/go.mod)
+[![Next.js](https://img.shields.io/badge/Next.js-static%20UI-000000?logo=nextdotjs&logoColor=white)](frontend)
+[![Docker image](https://img.shields.io/badge/Docker-~29MB%20Alpine-2496ED?logo=docker&logoColor=white)](Dockerfile)
+[![Prometheus](https://img.shields.io/badge/Prometheus-%2Fmetrics-E6522C?logo=prometheus&logoColor=white)](#grafana--prometheus)
+[![GitHub stars](https://img.shields.io/github/stars/jamolovmn/ParkPulse?style=flat)](https://github.com/jamolovmn/ParkPulse/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/jamolovmn/ParkPulse)](https://github.com/jamolovmn/ParkPulse/commits/main)
+
 ParkPulse tails the parking controller's Docker logs, reconstructs each car's
 ANPR → payment → barrier-open chain, and surfaces two things operators actually
 care about:

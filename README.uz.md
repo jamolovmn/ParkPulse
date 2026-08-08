@@ -3,6 +3,14 @@
 **Shlagbaumli parkovka tizimlari uchun real vaqt monitoringi.**
 🇬🇧 English docs: [**README.md**](README.md)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](backend/go.mod)
+[![Next.js](https://img.shields.io/badge/Next.js-static%20UI-000000?logo=nextdotjs&logoColor=white)](frontend)
+[![Docker image](https://img.shields.io/badge/Docker-~29MB%20Alpine-2496ED?logo=docker&logoColor=white)](Dockerfile)
+[![Prometheus](https://img.shields.io/badge/Prometheus-%2Fmetrics-E6522C?logo=prometheus&logoColor=white)](#grafana--prometheus)
+[![GitHub stars](https://img.shields.io/github/stars/jamolovmn/ParkPulse?style=flat)](https://github.com/jamolovmn/ParkPulse/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/jamolovmn/ParkPulse)](https://github.com/jamolovmn/ParkPulse/commits/main)
+
 ParkPulse parkovka kontrollerining Docker loglarini o'qiydi, har bir mashinaning
 **ANPR → to'lov → shlagbaum ochilishi** zanjirini qayta tiklaydi va operatorga
 eng muhim ikki narsani ko'rsatadi:
